@@ -1,0 +1,876 @@
+* Table of contents                               :toc_2:noexport:
+- [[#introduction][Introduction]]
+- [[#set-up-environment][Set up environment]]
+  - [[#compilers][Compilers]]
+  - [[#conda-mamba][Conda (mamba)]]
+  - [[#working-folders][Working folders]]
+- [[#openmpi][OpenMPI]]
+- [[#netcdf][NetCDF]]
+  - [[#hdf5][HDF5]]
+  - [[#netcdf-440][netcdf-4.4.0]]
+  - [[#netcdf-cxx-430][netcdf-cxx-4.3.0]]
+  - [[#netcdf-fortran-444][netcdf-fortran-4.4.4]]
+  - [[#parallel-netcdf-1110][parallel-netcdf-1.11.0]]
+- [[#pism][PISM]]
+  - [[#everytrace][Everytrace]]
+  - [[#hypre][hypre]]
+  - [[#petsc][PETSc]]
+  - [[#pism-1][PISM]]
+- [[#ibmisc][ibmisc]]
+  - [[#blitz][Blitz]]
+  - [[#boost][boost]]
+  - [[#ibmisc-1][IBMISC]]
+- [[#icebin][icebin]]
+  - [[#cgal][CGAL]]
+  - [[#icebin-1][ICEBIN]]
+- [[#modele][ModelE]]
+  - [[#checkout-the-branch][Checkout the branch]]
+  - [[#set-up-modelerc][Set up modelErc]]
+  - [[#set-up-rundeck][Set up rundeck]]
+  - [[#copy-pism-ics-to-run-folder][Copy PISM ICs to run folder]]
+  - [[#run-e][Run E]]
+
+* Introduction
+
+The following steps create an environment for coupled ModelE/PISM runs. At the end of this, you should have a folder structure that looks like the following in your =${LIME_ROOT}= location:
+
+#+BEGIN_SRC bash :exports both :results verbatim :dir ~/projects/GISS/LIME
+find . -maxdepth 2 -type d | grep -v git
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+.
+./src
+./src/everytrace
+./src/netcdf-cxx4-4.3.0
+./src/modelE
+./src/cgal-releases-CGAL-4.12.2
+./src/blitz
+./src/petsc-3.7.7
+./src/boost_1_82_0
+./src/ibmisc
+./src/hypre
+./src/netcdf-c-4.4.0
+./src/netcdf-fortran-4.4.4
+./src/hdf5
+./src/icebin
+./src/openmpi-1.8.1
+./src/pnetcdf-1.11.0
+./src/pism
+./opt
+./opt/etc
+./opt/include
+./opt/lib
+./opt/bin
+./opt/share
+./opt/pylib
+#+end_example
+
+* Set up environment
+** Compilers
+
+*** Discover
+
+#+BEGIN_SRC bash :exports both :results verbatim
+module purge
+
+module load comp/gcc/12.1.0 cmake/3.23.1
+#+END_SRC
+
+*** Local linux machine
+
+#+BEGIN_SRC bash :exports both :results verbatim
+echo "GCC"
+gcc --version
+
+echo "CMAKE"
+cmake --version
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+GCC
+gcc (Ubuntu 11.3.0-1ubuntu1~22.04.1) 11.3.0
+Copyright (C) 2021 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+CMAKE
+cmake version 3.22.1
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+#+end_example
+
+
+** Conda (mamba)
+
+On discover, I installed my own =mamba= in =${NOBACKUP}/local/mambaforge= and then in my =~/.bash_profile= set
+
+#+BEGIN_SRC bash :exports both :results verbatim
+export MAMBA_ROOT_PREFIX=/discover/nobackup/kmankoff/local/mambaforge
+eval "$(/discover/nobackup/kmankoff/local/mambaforge/bin/conda shell.bash hook)" 
+#+END_SRC
+
+Create a mamba environment with needed tools
+
+#+BEGIN_SRC bash :exports both :results verbatim
+mamba create -n lime # land ice model E
+mamba activate lime
+mamba install -y python=3.5.2 numpy=1.15 eigen=3.3.1 mpfr proj4 gtest udunits tclap fftw gsl cython zlib
+mamba deactivate
+#+END_SRC
+
+May need to edit =envs/lime/include/proj_api.h= and set =#define ACCEPT_USE_OF_DEPRECATED_PROJ_API_H 1=
+
+WARNING: Make sure no other conda envs are active. On a personal machine you may have configured the Conda =base= env to be active by default.
+
+#+BEGIN_SRC bash :exports both :results verbatim
+mamba deactivate
+#+END_SRC
+
+** Working folders
+
+Warning - if you build everything from scratch, the following should work. If you use some things that I have installed into my =${LIME_ROOT}= and sub-folders, you'll need to carefully pick when to use my =${LIME_ROOT}= and when to use your own location for =ModelE=, =PISM=, or other tools that you set up for your own development.
+
+Everything is compiled and run from =${LIME_ROOT}/src=
+
+On my local laptop, I work in =~/projects/GISS/LIME=, and have the following in =~/projects/GISS/LIME/.envrc= and use https://direnv.net/ to auto-activate it when I am in that or a subfolder. 
+
+#+BEGIN_SRC bash :exports results :results verbatim
+cat ~/projects/GISS/LIME/.envrc
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+export LIME_ROOT=/home/kdm/projects/GISS/LIME
+export LD_LIBRARY_PATH=${LIME_ROOT}/opt/lib:${LD_LIBRARY_PATH}
+export PATH=${LIME_ROOT}/opt/bin:${PATH}
+export MODELERC=${PWD}/modelErc
+export MAMBA_ENV=${HOME}/local/mambaforge/envs
+
+# no `module load` on Laptop; Compilers are in default PATH or adjusted PATH above
+## module purge
+## Intel
+## module load comp/intel/20.0.0.166 mpi/impi/20.0.0.166 cmake/3.23.1
+## GCC
+## module load comp/gcc/12.1.0 cmake/3.23.1
+#+end_example
+
+On =discover=, I work in =${NOBACKUP}/LIME=, and have the following in =${NOBACKUP}/LIME/.envrc=
+
+#+HEADER: :prologue "ssh discover"
+#+BEGIN_SRC bash :exports results :results verbatim
+cat /discover/nobackup/kmankoff/LIME/.envrc
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+
+export LIME_ROOT=${NOBACKUP}/LIME
+export MAMBA_ENV=${NOBACKUP}/local/mambaforge/envs
+export LD_LIBRARY_PATH=${LIME_ROOT}/opt/lib:${LD_LIBRARY_PATH}
+
+export PATH=${LIME_ROOT}/opt/bin:${PATH}
+
+module purge
+
+# Intel
+# module load comp/intel/20.0.0.166 mpi/impi/20.0.0.166
+
+# GCC
+module load comp/gcc/12.1.0
+
+module load cmake/3.23.1
+
+# Put a modelErc in each working folder if necessary
+export MODELERC=${PWD}/modelErc
+
+#+end_example
+
+
+* OpenMPI
+
+#+BEGIN_SRC bash :exports both :results verbatim
+mkdir -p ${LIME_ROOT}/src
+cd ${LIME_ROOT}/src
+wget http://www.open-mpi.org/software/ompi/v1.8/downloads/openmpi-1.8.1.tar.gz
+tar zxvf openmpi-1.8.1.tar.gz
+cd openmpi-1.8.1
+
+# GNU
+FC=gfortran
+CC=gcc
+
+./configure --prefix=${LIME_ROOT}/opt MAKE=/usr/bin/gmake CC="${CC}" FC="${FC}" CFLAGS="-Wall -Wwrite-strings -Wno-strict-aliasing -Wno-unknown-pragmas -O2 " --enable-shared CXX="g++" CXXFLAGS=" -Wall -Wwrite-strings -Wno-strict-aliasing -Wno-unknown-pragmas -O2" FCFLAGS="-fallow-argument-mismatch -O2" --disable-vt
+
+make -j all
+make install
+#+END_SRC
+
+* NetCDF
+** HDF5
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+git clone -b hdf5-1_8_18 git@github.com:HDFGroup/hdf5.git
+cd hdf5
+
+# Spack used this but causes compile error here
+#  --enable-fortran2003 \
+
+./configure \
+  --prefix=${LIME_ROOT}/opt \
+  --disable-cxx \
+  --enable-hl \
+  --enable-fortran \
+  --enable-parallel \
+  --enable-production \
+  --enable-unsupported \
+  --with-zlib=${MAMBA_ENV}/lime \
+  --without-szlib \
+  --disable-threadsafe \
+  CC=mpicc \
+  FC=mpifort \
+  CXX=mpicxx \
+  CFLAGS="-fPIC" \
+  FCFLAGS="-fPIC" \
+  CPPFLAGS="-fPIC" \
+
+make -j
+make install
+#+END_SRC
+
+** netcdf-4.4.0
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+wget https://github.com/Unidata/netcdf-c/archive/refs/tags/v4.4.0.tar.gz -O netcdf-c-4.4.0.tar.gz
+tar zxvf netcdf-c-4.4.0.tar.gz 
+cd netcdf-c-4.4.0/
+
+./configure \
+  --prefix=${LIME_ROOT}/opt \
+  --enable-v2 \
+  --enable-utilities \
+  --enable-largefile \
+  --enable-netcdf4 \
+  --enable-fsync \
+  --enable-dynamic-loading \
+  --disable-dap \
+  --enable-parallel4 \
+  --disable-pnetcdf \
+  CFLAGS="-fPIC" \
+  CPPFLAGS="-I${LIME_ROOT}/opt/include" \
+  LDFLAGS="-L${LIME_ROOT}/opt/lib" \
+  CC=mpicc
+  
+make -j
+make check
+make install
+#+END_SRC
+
+
+** netcdf-cxx-4.3.0
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+wget https://github.com/Unidata/netcdf-cxx4/archive/refs/tags/v4.3.0.tar.gz -O netcdf-cxx4-4.3.0.tar.gz
+tar zxvf netcdf-cxx4-4.3.0.tar.gz
+cd netcdf-cxx4-4.3.0
+
+mkdir build
+cd build
+
+[[ $(basename $(pwd)) == "build" ]] && rm -fR *
+
+cmake .. \
+  -D CMAKE_INSTALL_PREFIX=${LIME_ROOT}/opt \
+  -D CMAKE_INSTALL_LIBDIR=${LIME_ROOT}/opt/lib \
+  -D CMAKE_C_FLAGS="-fPIC" \
+  -D CMAKE_VERBOSE_MAKEFILE=ON \
+  -D CMAKE_C_COMPILER=mpicc \
+  -D CMAKE_CXX_COMPILER=mpicxx \
+  -D CMAKE_IGNORE_PATH="/usr;/lib;/;/lib/x86_64-linux-gnu" \
+  -D NETCDF_C_LIBRARY=${LIME_ROOT}/opt/lib/libnetcdf.so \
+
+make -j
+make install
+#+END_SRC
+
+The =CMAKE_IGNORE_PATH= stops cmake from linking to the system =libnetcdf.so= file.
+
+#+BEGIN_SRC bash :exports both :results verbatim
+ldd ../lime/opt/lib/libnetcdf-cxx4.so | grep netcdf
+#+END_SRC
+
+#+RESULTS:
+: 	libnetcdf.so.11 => /path/to/lime/opt/lib/libnetcdf.so.11 (0x00007f62e1b04000)
+
+** netcdf-fortran-4.4.4
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+wget https://github.com/Unidata/netcdf-fortran/archive/refs/tags/v4.4.4.tar.gz -O netcdf-fortran-4.4.4.tar.gz
+tar zxvf netcdf-fortran-4.4.4.tar.gz
+cd netcdf-fortran-4.4.4/
+
+mkdir build
+cd build
+
+[[ $(basename $(pwd)) == "build" ]] && rm -fR *
+
+cmake .. \
+  -D CMAKE_INSTALL_PREFIX=${LIME_ROOT}/opt \
+  -D CMAKE_INSTALL_LIBDIR=${LIME_ROOT}/opt/lib \
+  -D CMAKE_C_FLAGS="-fPIC" \
+  -D CMAKE_Fortran_FLAGS="-fallow-argument-mismatch" \
+  -D CMAKE_VERBOSE_MAKEFILE=ON \
+  -D CMAKE_C_COMPILER=mpicc \
+  -D CMAKE_Fortran_COMPILER=mpifort \
+  -D NETCDF_C_LIBRARY=${LIME_ROOT}/opt/lib/libnetcdf.so \
+  -D netCDF_INCLUDE_DIR=${LIME_ROOT}/opt/include \
+  -D ENABLE_TESTS=ON \
+  
+make # -j  # -j fails, unless run 2x, when ENABLE_TESTS=ON
+make install
+#+END_SRC
+
+** parallel-netcdf-1.11.0
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+wget https://parallel-netcdf.github.io/Release/pnetcdf-1.11.0.tar.gz -O pnetcdf-1.11.0.tar.gz
+tar zxvf pnetcdf-1.11.0.tar.gz
+cd pnetcdf-1.11.0
+
+./configure \
+  --prefix=${LIME_ROOT}/opt \
+  --with-mpi=${LIME_ROOT}/opt \
+  --with-netcdf4=${LIME_ROOT}/opt \
+  --enable-shared \
+  --disable-cxx \
+  MPICC=mpicc \
+  MPICXX=mpicxx \
+  MPIF77=mpif77 \
+  MPIF90=mpifort \
+  CFLAGS="-fPIC" \
+  CXXFLAGS="-fPIC" \
+  FCFLAGS="-fPIC -fallow-argument-mismatch -ggdb3" \
+  FFLAGS="-fallow-argument-mismatch -ggdb3" \
+
+make -j
+# make tests
+# make check
+# make ptest
+# make ptests
+make install
+#+END_SRC
+
+* PISM
+** Everytrace
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+git clone git@github.com:NASA-GISS/everytrace
+cd everytrace
+
+mkdir build
+cd build
+
+[[ $(basename $(pwd)) == "build" ]] && rm -fR *
+
+cmake .. \
+  -D CMAKE_INSTALL_PREFIX=${LIME_ROOT}/opt \
+  -D CMAKE_VERBOSE_MAKEFILE=ON \
+  -D USE_FORTRAN=YES \
+  -D USE_MPI=YES \
+  -D USE_CXX=YES
+
+make -j
+make install
+#+END_SRC
+
+** hypre
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+git clone -b v2.13.0 https://github.com/hypre-space/hypre
+cd hypre/src
+
+ # --with-lapack-libs="mkl_intel_lp64 mkl_sequential mkl_core pthread m dl" \
+ # --with-blas-libs="mkl_intel_lp64 mkl_sequential mkl_core pthread m dl" \
+ # --with-lapack-lib-dirs=${MAMBA_ENV}/lime/lib \
+ # --with-blas-lib-dirs=${MAMBA_ENV}/lime/lib \
+ # --with-MPI-libs="mpi" \
+# LDFLAGS="-L/discover/nobackup/kmankoff/lime/opt/lib -lmpi"
+
+./configure \
+  --prefix=${LIME_ROOT}/opt/ \
+ --with-lapack=${MAMBA_ENV}/lime/lib \
+ --with-blas=${MAMBA_ENV}/lime/lib \
+ --with-MPI \
+ --with-MPI-include="${LIME_ROOT}/opt/include" \
+ --with-MPI-lib-dirs="${LIME_ROOT}/opt/lib" \
+ --enable-shared \
+ --without-superlu \
+ --without-mli \
+ --without-fei \
+ CC=mpicc \
+ CXX=mpicxx \
+ FC=mpifort
+ CFGLAGS="-I${LIME_ROOT}/opt/include -fPIC"
+ CPPFLAGS="-fPIC" \
+
+
+make -j
+make install
+#+END_SRC
+
+DIFF: Discover has =-lpthread= as output of =./configure= command. This does not appear on laptop.
+
+** PETSc
+
++ WARNING: Need to set =--with-batch= flag
++ Build in place: Don't use =--prefix=${LIME_ROOT}/opt/petsc=
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+wget --no-check-certificate http://ftp.mcs.anl.gov/pub/petsc/release-snapshots/petsc-lite-3.7.tar.gz
+tar -zxvf petsc-lite-3.7.tar.gz
+cd petsc-3.7.7
+
+python2 ./configure \
+  FFLAGS='-DNDEBUG -O0 -fallow-argument-mismatch' \
+  --download-fblaslapack \
+  --with-scalapack=0 \
+  --with-metis=0 \
+  --with-hdf5=1 \
+  --with-hdf5-dir=${LIME_ROOT}/opt \
+  --with-hypre=1 \
+  --with-hypre-dir=${LIME_ROOT}/opt \
+  --with-mpi-dir=${LIME_ROOT}/opt \
+  --with-ssl=0
+
+make PETSC_DIR=${LIME_ROOT}/src/petsc-3.7.7 PETSC_ARCH=arch-linux2-c-debug all
+make PETSC_DIR=${LIME_ROOT}/src/petsc-3.7.7 PETSC_ARCH=arch-linux2-c-debug test
+make PETSC_DIR=${LIME_ROOT}/src/petsc-3.7.7 PETSC_ARCH=arch-linux2-c-debug streams
+#+END_SRC
+
+** PISM
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+git clone -b devlr git@github.com:NASA-GISS/pism.git
+cd pism
+
+mkdir -p build
+cd build
+
+
+[[ $(basename $(pwd)) == "build" ]] && rm -fR *
+
+CC="${LIME_ROOT}/opt/bin/mpicc" CXX="${LIME_ROOT}/opt/bin/mpicxx" FC="${LIME_ROOT}/opt/bin/mpifort" \
+  cmake .. \
+  -D CMAKE_INSTALL_PREFIX=${LIME_ROOT}/opt \
+  -D CMAKE_VERBOSE_MAKEFILE=ON \
+  -D CMAKE_C_FLAGS="-march=native -fPIC -DNDEBUG -ggdb3 -O0" \
+  -D CMAKE_C_COMPILER=${LIME_ROOT}/opt/bin/mpicc \
+  -D CMAKE_CXX_FLAGS="-march=native -fPIC -DNDEBUG -ggdb3 -O0" \
+  -D CMAKE_CXX_COMPILER=${LIME_ROOT}/opt/bin/mpicxx \
+  -D CMAKE_FIND_ROOT_PATH="${MAMBA_ENV}/lime" \
+  -D Pism_BUILD_EXTRA_EXECS=YES \
+  -D Pism_BUILD_ICEBIN=YES \
+  -D Pism_BUILD_PYTHON_BINDINGS=NO \
+  -D Pism_DEBUG=YES \
+  -D Pism_LOOK_FOR_LIBRARIES=YES \
+  -D Pism_PEDANTIC_WARNINGS=YES \
+  -D Pism_USE_EVERYTRACE=YES \
+  -D Pism_USE_PROJ4=YES \
+  -D Pism_USE_PARALLEL_NETCDF4=NO \
+  -D Pism_USE_PNETCDF=NO \
+  -D Pism_USE_PARALLEL_HDF5=NO \
+  -D NETCDF_INCLUDES=${LIME_ROOT}/opt/include \
+  -D NETCDF_LIBRARIES=${LIME_ROOT}/opt/lib/libnetcdf.so \
+  -D NCGEN_PROGRAM=${LIME_ROOT}/opt/bin/ncgen \
+  -D EVERYTRACE_c_REFADDR=${LIME_ROOT}/opt/lib \
+  -D EVERYTRACE_INCLUDE_DIR=${LIME_ROOT}/opt/include \
+  -D EVERYTRACE_LIBRARY=${LIME_ROOT}/opt/lib/libeverytrace.so \
+  -D FFTW_INCLUDES=${MAMBA_ENV}/lime/include \
+  -D FFTW_LIBRARIES=${MAMBA_ENV}/lime/lib/libfftw3.so \
+  -D GSL_INCLUDES=${MAMBA_ENV}/lime/include \
+  -D GSL_LIBRARIES=${MAMBA_ENV}/lime/lib/libgsl.so \
+  -D PETSC_DIR=${LIME_ROOT}/src/petsc-3.7.7 \
+  -D PETSC_ARCH=arch-linux2-c-debug \
+  -D PROJ4_INCLUDES=${MAMBA_ENV}/lime/include \
+  -D PROJ4_LIBRARIES=${MAMBA_ENV}/lime/lib/libproj.so \
+  -D UDUNITS2_INCLUDES=${MAMBA_ENV}/lime/include \
+  -D UDUNITS2_LIBRARIES=${MAMBA_ENV}/lime/lib/libudunits2.so \
+
+make -j VERBOSE=1
+make install
+#+END_SRC
+
+* ibmisc
+** Blitz
+
+Note that conda has libblitz 1.0.2 so this could perhaps be offloaded to the conda env.
+
+In =${LIME_ROOT}/src=
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+git clone git@github.com:blitzpp/blitz
+cd blitz
+mkdir build
+cd build
+
+[[ $(basename $(pwd)) == "build" ]] && rm -fR *
+
+CFLAGS="-fPIC" \
+ FCFLAGS="-fPIC" \
+ CPPFLAGS="-fPIC" \
+ cmake .. \
+  -D CMAKE_INSTALL_PREFIX=${LIME_ROOT}/opt \
+  -D CMAKE_INSTALL_LIBDIR=${LIME_ROOT}/opt/lib \
+  -D Python_EXECUTABLE=${MAMBA_ENV}/lime/bin/python
+
+make -j
+make install
+#+END_SRC
+
+** boost
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+wget https://boostorg.jfrog.io/artifactory/main/release/1.82.0/source/boost_1_82_0.tar.gz
+tar zxvf boost_1_82_0.tar.gz
+cd boost_1_82_0
+
+./bootstrap.sh \
+  --prefix=${LIME_ROOT}/opt/ \
+  --with-python=${MAMBA_ENV}/lime/bin/python
+
+which mpic++ # ${LIME_ROOT}/opt/bin/mpic++
+
+# Edit =project-config.jam= and add =using mpi ;= 
+echo "using mpi ;" >>  project-config.jam
+
+# build and install
+
+# --build-type=complete --layout=tagged
+# --target=shared
+
+./b2 -a -j8 -q \
+  --target=shared \
+  link=shared \
+  threading=multi \
+  runtime-link=shared \
+  -s NO_LZMA=1 \
+  install
+
+#+END_SRC
+
+DIFF: Discover has "no" for LZMA and statx, libbacktrace. Laptop has "yes"
+
+** IBMISC
+
+In =${LIME_ROOT}/src=
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+git clone -b mankoff/nospack git@github.com:NASA-GISS/ibmisc.git
+cd ibmisc
+
+mkdir -p build
+cd build
+
+
+[[ $(basename $(pwd)) == "build" ]] && rm -fR *
+
+CC="${LIME_ROOT}/opt/bin/mpicc" CXX="${LIME_ROOT}/opt/bin/mpicxx" FC="${LIME_ROOT}/opt/bin/mpif90" \
+  cmake .. \
+  -D CMAKE_INSTALL_PREFIX=${LIME_ROOT}/opt \
+  -D CMAKE_VERBOSE_MAKEFILE=ON \
+  -D CMAKE_PREFIX_PATH=${MAMBA_ENV}/lime \
+  -D CMAKE_C_FLAGS="-DNDEBUG -ggdb3 -O0 -fPIC" \
+  -D CMAKE_CXX_FLAGS="-DNDEBUG -ggdb3 -O0 -fPIC" \
+  -D Boost_INCLUDE_DIR=${LIME_ROOT}/opt/include \
+  -D BLITZ_ROOT=${LIME_ROOT}/opt \
+  -D BLITZ_LIBRARY=${LIME_ROOT}/opt/include \
+  -D BLITZ_LIBRARY=${LIME_ROOT}/opt/lib/libblitz.so \
+  -D BUILD_PYTHON=YES \
+  -D CYTHON_EXECUTABLE=${MAMBA_ENV}/lime/bin/cython \
+  -D EVERYTRACE_c_REFADDR=${LIME_ROOT}/opt/lib \
+  -D EVERYTRACE_INCLUDE_DIR=${LIME_ROOT}/opt/include \
+  -D EVERYTRACE_LIBRARY=${LIME_ROOT}/opt/lib/libeverytrace.so \
+  -D EIGEN3_INCLUDE_DIR=${MAMBA_ENV}/lime/include/eigen3 \
+  -D GTEST_LIBRARY_MAIN=${MAMBA_ENV}/lime/lib/libgtest.so \
+  -D GTEST_INCLUDE_DIR=${MAMBA_ENV}/lime/include \
+  -D NETCDF_C_LIBRARY=${LIME_ROOT}/opt/lib/libnetcdf.so \
+  -D NETCDF_C_INCLUDE_DIR=${LIME_ROOT}/opt/include \
+  -D NETCDF_CXX4_LIBRARY=${LIME_ROOT}/opt/lib/libnetcdf-cxx4.so \
+  -D NETCDF_CXX4_INCLUDE_DIR=${LIME_ROOT}/opt/include \
+  -D PROJ4_INCLUDES=${MAMBA_ENV}/lime/include \
+  -D PROJ4_LIBRARIES=${MAMBA_ENV}/lime/lib/libproj.so \
+  -D PYTHON_LIBRARY=${MAMBA_ENV}/lime/lib/libpython3.so \
+  -D UDUNITS2_INCLUDES=${MAMBA_ENV}/lime/include \
+  -D USE_BLITZ=YES \
+  -D USE_BOOST=YES \
+  -D USE_EVERYTRACE=YES \
+  -D USE_GTEST=YES \
+  -D USE_NETCDF=YES \
+  -D USE_PROJ4=YES \
+  -D USE_UDUNITS2=YES \
+
+  
+make -j
+make install
+#+END_SRC
+
+* icebin
+** CGAL
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+wget https://github.com/CGAL/cgal/archive/refs/tags/releases/CGAL-4.12.2.zip
+
+unzip CGAL-4.12.2.zip
+cd cgal-releases-CGAL-4.12.2
+
+mkdir build
+cd build
+
+[[ $(basename $(pwd)) == "build" ]] && rm -fR *
+
+cmake .. \
+  -D CMAKE_INSTALL_PREFIX=${LIME_ROOT}/opt \
+  -D CMAKE_INSTALL_LIBDIR=${LIME_ROOT}/opt/lib \
+  -D CMAKE_C_FLAGS="-frounding-math -ggdb3" \
+  -D CMAKE_CXX_FLAGS="-frounding-math -ggdb3" \
+  -D CGAL_HEADER_ONLY=OFF \
+  -D GMP_LIBRARIES=${MAMBA_ENV}/lime/lib/libgmp.so \
+  -D GMP_INCLUDE_DIR=${MAMBA_ENV}/lime/include \
+  -D MPFR_LIBRARIES=${MAMBA_ENV}/lime/lib/libmpfr.so \
+  -D MPFR_INCLUDE_DIR=${MAMBA_ENV}/lime/include \
+  -D BUILD_SHARED_LIBS:BOOL=ON \
+  -D WITH_CGAL_Core:BOOL=NO \
+  -D WITH_CGAL_ImageIO:BOOL=NO \
+  -D WITH_CGAL_Qt5:BOOL=NO
+
+make -j
+make install
+#+END_SRC
+
+** ICEBIN
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+git clone -b mankoff/nospack git@github.com:NASA-GISS/icebin.git
+cd icebin
+mkdir -p build
+cd build
+
+# export PATH=${LIME_ROOT}/src/pygiss/main:$PATH
+# export PYTHONPATH=${LIME_ROOT}/src/pygiss:$PYTHONPATH
+
+[[ $(basename $(pwd)) == "build" ]] && rm -fR *
+
+CC="${LIME_ROOT}/opt/bin/mpicc" \
+  CXX="${LIME_ROOT}/opt/bin/mpicxx" \
+  FC="${LIME_ROOT}/opt/bin/mpif90" \
+  PETSC_DIR="${LIME_ROOT}/src/petsc-3.7.7" \
+  PETSC_ARCH="arch-linux2-c-debug" \
+  cmake .. \
+  -D CMAKE_INSTALL_PREFIX=${LIME_ROOT}/opt \
+  -D CMAKE_C_FLAGS="-DNDEBUG -O0 -ggdb3 -fpermissive -frounding-math -fPIC -I${MAMBA_ENV}/lime/lib/python3.11/site-packages/numpy/core/include" \
+  -D CMAKE_CXX_FLAGS="-DNDEBUG -O0 -ggdb3 -fpermissive -frounding-math -fPIC -I${MAMBA_ENV}/lime/lib/python3.11/site-packages/numpy/core/include" \
+  -D CMAKE_PREFIX_PATH="${LIME_ROOT}/opt/include/boost:${MAMBA_ENV}/lime" \
+  -D CMAKE_IGNORE_PATH="/usr;/lib;/usr/include;/usr/lib;/usr/lib64;/usr/bin" \
+  -D BUILD_COUPLER=YES \
+  -D BUILD_MODELE=YES \
+  -D BUILD_GRIDGEN=YES \
+  -D BUILD_PYTHON=YES \
+  -D USE_PISM=YES \
+  -D Boost_INCLUDE_DIR=${LIME_ROOT}/opt/include \
+  -D Boost_INCLUDE_DIRS=${LIME_ROOT}/opt/include \
+  -D Boost_LIBRARY_DIRS=${LIME_ROOT}/opt/lib \
+  -D BLITZ_ROOT=${LIME_ROOT}/opt \
+  -D BLITZ_LIBRARY=${LIME_ROOT}/opt/lib/libblitz.so \
+  -D CGAL_LIBRARY=${LIME_ROOT}/opt/lib/libCGAL.so \
+  -D CGAL_INCLUDE_DIR=${LIME_ROOT}/opt/include \
+  -D CYTHON_EXECUTABLE=${MAMBA_ENV}/lime/bin/cython \
+  -D EIGEN3_INCLUDE_DIR=${MAMBA_ENV}/lime/include/eigen3 \
+  -D EVERYTRACE_c_REFADDR=${LIME_ROOT}/opt/lib \
+  -D EVERYTRACE_INCLUDE_DIR=${LIME_ROOT}/opt/include \
+  -D EVERYTRACE_LIBRARY=${LIME_ROOT}/opt/lib/libeverytrace.so \
+  -D GMP_INCLUDE_DIR=${MAMBA_ENV}/lime/include \
+  -D GMP_LIBRARY=${MAMBA_ENV}/lime/lib/libgmp.so \
+  -D GTEST_LIBRARY_MAIN=${MAMBA_ENV}/lime/lib/libgtest.so \
+  -D GTEST_INCLUDE_DIR=${MAMBA_ENV}/lime/include \
+  -D IBMISC_ROOT=${LIME_ROOT}/opt \
+  -D IBMISC_INCLUDE_DIR=${LIME_ROOT}/opt/include \
+  -D IBMISC_LIBRARY=${LIME_ROOT}/opt/lib/libibmisc.so \
+  -D MPFR_INCLUDES=${MAMBA_ENV}/lime/include \
+  -D MPFR_LIBRARIES=${MAMBA_ENV}/lime/lib/libmpfr.so \
+  -D MPIEXEC_EXECUTABLE=${LIME_ROOT}/opt/bin/mpiexec \
+  -D MPI_C_COMPILER=${LIME_ROOT}/opt/bin/mpicc \
+  -D MPI_CXX_COMPILER=${LIME_ROOT}/opt/bin/mpicxx \
+  -D MPI_Fortran_COMPILER=${LIME_ROOT}/opt/bin/mpif90 \
+  -D NETCDF_CXX4_LIBRARY=${LIME_ROOT}/opt/lib/libnetcdf-cxx4.so \
+  -D NETCDF_CXX4_INCLUDE_DIR=${LIME_ROOT}/opt/include \
+  -D PROJ4_INCLUDES=${MAMBA_ENV}/lime/include \
+  -D PROJ4_LIBRARIES=${MAMBA_ENV}/lime/lib/libproj.so \
+  -D PYTHON_EXECUTABLE=${MAMBA_ENV}/lime/bin/python \
+  -D PYTHON_LIBRARY=${MAMBA_ENV}/lime/lib/libpython3.so \
+  -D PYTHON_INCLUDES=${MAMBA_ENV}/lime/include/python3.11 \
+  -D TCLAP_INCLUDE_DIR=${MAMBA_ENV}/lime/include \
+  -D ZLIB_INCLUDE_DIR=${MAMBA_ENV}/lime/include \
+  -D ZLIB_LIBRARY=${MAMBA_ENV}/lime/lib/libz.so \
+  -Wno-dev
+
+make -j icebin
+make -j
+make install
+#+END_SRC
+
+* ModelE
+** Checkout the branch
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${LIME_ROOT}/src
+git clone -b E2.1_li_trialmerge simplex.giss.nasa.gov:/giss/gitrepo/modelE # discover
+git clone -b E2.1_li_trialmerge discover:/discover/nobackup/kmankoff/modelE-bridge modelE # localhost
+cd modelE/decks
+#+END_SRC
+
+** Set up modelErc
+
+*** Local
+
+#+NAME: modelErc
+#+BEGIN_SRC bash :exports both :results verbatim
+export MODELERC=~/projects/GISS/LIME/modelErc # local
+grep -v "^#" ${MODELERC} | grep -v "^$"
+#+END_SRC
+
+#+RESULTS: modelErc
+#+begin_example
+DECKS_REPOSITORY=/home/kdm/projects/GISS/ModelE_Support/prod_decks
+CMRUNDIR=/home/kdm/projects/GISS/ModelE_Support/prod_runs
+GCMSEARCHPATH=/home/kdm/projects/GISS/ModelE_Support/prod_input_files
+EXECDIR=/home/kdm/projects/GISS/ModelE_Support/exec
+SAVEDISK=/home/kdm/projects/GISS/ModelE_Support/huge_space
+NETCDFHOME=/home/kdm/projects/GISS/LIME/opt
+MPI=YES
+MPIDISTR=openmpi
+MPIDIR=/home/kdm/projects/GISS/LIME/opt
+ABI=64
+COMPILER=gfortran
+MAILTO=
+UMASK=022
+OVERWRITE=NO
+OUTPUT_TO_FILES=YES
+VERBOSE_OUTPUT=YES
+LILIBSDIR=/home/kdm/projects/GISS/LIME/opt
+#+end_example
+
+#+RESULTS:
+#+begin_example
+DECKS_REPOSITORY=/home/kdm/projects/GISS/ModelE_Support/prod_decks
+CMRUNDIR=/home/kdm/projects/GISS/ModelE_Support/prod_runs
+GCMSEARCHPATH=/home/kdm/projects/GISS/ModelE_Support/prod_input_files
+EXECDIR=/home/kdm/projects/GISS/ModelE_Support/exec
+SAVEDISK=/home/kdm/projects/GISS/ModelE_Support/huge_space
+MPI=YES
+MPIDISTR=openmpi
+MPIDIR=/home/kdm/projects/GISS/LIME/opt
+ABI=64
+COMPILER=gfortran
+MAILTO=
+UMASK=022
+OVERWRITE=NO
+OUTPUT_TO_FILES=YES
+VERBOSE_OUTPUT=YES
+NETCDFHOME=/home/kdm/projects/GISS/LIME/opt
+#+end_example
+
+*** discover
+
+#+HEADER: :prologue "ssh discover -t \"cd; bash --login\""
+#+BEGIN_SRC bash :exports results :results verbatim
+<<modelErc>>
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+DECKS_REPOSITORY=/discover/nobackup/kmankoff/ModelE_Support/prod_decks
+CMRUNDIR=/discover/nobackup/kmankoff/ModelE_Support/prod_runs
+GCMSEARCHPATH=/discover/nobackup/projects/giss/prod_input_files
+EXECDIR=/discover/nobackup/kmankoff/ModelE_Support/exec
+SAVEDISK=/discover/nobackup/kmankoff/ModelE_Support/huge_space
+NETCDFHOME=/discover/nobackup/kmankoff/LIME/opt
+MPI=YES
+MPIDISTR=openmpi
+MPIDIR=/discover/nobackup/kmankoff/LIME/opt
+ABI=64
+COMPILER=gfortran
+MAILTO=mankoff@gmail.com
+UMASK=022
+OVERWRITE=NO
+OUTPUT_TO_FILES=NO
+VERBOSE_OUTPUT=YES
+LILIBSDIR=/discover/nobackup/kmankoff/LIME/opt
+QSUB_STRING="sbatch --qos=debug -A s1001 -C sky -n %np -t %t "
+QSUB_STRING_nobatch=""
+QSUB_STRING_general="sbatch -A s1001 -C sky -n %np -t %t "
+QSUB_STRING_giss="sbatch --qos=giss -A s1001 -C sky -n %np -t %t "
+#+end_example
+
+** Set up rundeck
+
++ Run this from the =decks= folder.
++ Also make sure that you are using the =E2.1_li_mess= branch
+
+#+BEGIN_SRC bash :exports both :results verbatim
+RUNNAME=r01
+
+# discover
+cp /discover/nobackup/kmankoff/data/landice/E216F40_1.R ${RUNNAME}.R # No PISM
+cp /discover/nobackup/kmankoff/data/landice/E6F40nopism.R ${RUNNAME}.R # Uncoupled PISM
+cp /discover/nobackup/kmankoff/data/landice/E6F40pism.R ${RUNNAME}.R # Coupled PISM
+
+# localhost
+cp /home/kdm/projects/GISS/data/landice/E4M20.R ${RUNNAME}.R # No PISM - medium resolution (fast)
+# cp /home/kdm/projects/GISS/data/landice/E4M20_li.R ${RUNNAME}.R # Coupled PISM - medium resolution (fast)
+# cp /home/kdm/projects/GISS/data/landice/E216F40_1.R ${RUNNAME}.R # No PISM - high res (slow)
+cp /home/kdm/projects/GISS/data/landice/E6F40nopism.R ${RUNNAME}.R # Uncoupled PISM
+cp /home/kdm/projects/GISS/data/landice/E6F40pism.R ${RUNNAME}.R # Coupled PISM
+
+make clean RUN=${RUNNAME}
+
+make -j setup \
+  RUN=${RUNNAME}  \
+  MPI=YES \
+  COMPILE_WITH_TRAPS=NO \
+  EXTRA_FFLAGS="-O0 -ggdb3 -fwrapv -fallow-argument-mismatch -fallow-invalid-boz" \
+  EXTRA_LFLAGS="-O0 -ggdb3"  \
+  2>&1 | tee ${RUNNAME}.compile.out
+   
+#+END_SRC
+
+** Copy PISM ICs to run folder
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cp -R /discover/nobackup/kmankoff/data/landice/config ./${RUNNAME} # discover
+cp -R /home/kdm/projects/GISS/data/landice/config ${RUNNAME} # localhost
+#+END_SRC
+
+** Run E
+
+#+BEGIN_SRC bash :exports both :results verbatim
+../exec/runE ${RUNNAME} -cold-restart -np 2 # start
+../exec/runE ${RUNNAME} -np 2               # restart
+
+# capture stdout and stderr to one file
+../exec/runE ${RUNNAME} -cold-restart -np 2 2>&1 | tee ${RUNNAME}/slurm.out # start
+../exec/runE ${RUNNAME} -np 1 2>&1 | tee ${RUNNAME}/slurm.out               # restart
+#+END_SRC
