@@ -847,12 +847,19 @@ cp /home/kdm/projects/GISS/data/landice/E6F40pism.R ${RUNNAME}.R # Coupled PISM
 
 make clean RUN=${RUNNAME}
 
+# EXTRA_FFLAGS+=" -O0 -ggdb3" # GNU
+EXTRA_FFLAGS+=" -O0 -g" # Intel
+EXTRA_FFLAGS+=" -fwrapv -fallow-argument-mismatch -fallow-invalid-boz"
+EXTRA_FFLAGS+=" -DLI_COUPLE_DAILY"
+
+EXTRA_LFLAGS+="-O0 -ggdb3"
+
 make -j setup \
   RUN=${RUNNAME}  \
   MPI=YES \
   COMPILE_WITH_TRAPS=NO \
-  EXTRA_FFLAGS="-O0 -ggdb3 -fwrapv -fallow-argument-mismatch -fallow-invalid-boz" \
-  EXTRA_LFLAGS="-O0 -ggdb3"  \
+  EXTRA_FFLAGS="${EXTRA_FFLAGS}" \
+  EXTRA_LFLAGS="${EXTRA_LFLAGS}" \
   2>&1 | tee ${RUNNAME}.compile.out
    
 #+END_SRC
