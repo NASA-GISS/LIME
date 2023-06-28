@@ -26,7 +26,7 @@
 - [[#modele][ModelE]]
   - [[#checkout-the-branch][Checkout the branch]]
   - [[#set-up-modelerc][Set up modelErc]]
-  - [[#set-up-rundeck][Set up rundeck]]
+  - [[#set-up-rundeck--compile-modele][Set up rundeck & compile modelE]]
   - [[#copy-pism-ics-to-run-folder][Copy PISM ICs to run folder]]
   - [[#run-e][Run E]]
 
@@ -825,7 +825,7 @@ QSUB_STRING_general="sbatch -A s1001 -C sky -n %np -t %t "
 QSUB_STRING_giss="sbatch --qos=giss -A s1001 -C sky -n %np -t %t "
 #+end_example
 
-** Set up rundeck
+** Set up rundeck & compile modelE
 
 + Run this from the =decks= folder.
 + Also make sure that you are using the =E2.1_li_mess= branch
