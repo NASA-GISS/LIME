@@ -425,8 +425,8 @@ _ = ds_250_800['salt'].isel(time=0).plot()
 
 #+BEGIN_SRC jupyter-python :exports both
 P = ds[['pot_temp','salt','shoreface_Rignot']]\
-    .where(ds['shoreface_Rignot'] > 0)\
     .sel(z=800, method='nearest')
+    # .where(ds['shoreface_Rignot'] > 0)\
 
 P = P.rename({'pot_temp':'theta_ocean',
               'salt':'salinity_ocean',
@@ -448,19 +448,23 @@ Pt = P['time'].expand_dims(tb = 2).rename("time_bnds")
 Pt['time_bounds'] = (('time','tb'), bounds.T)
 #+END_SRC
 
+#+RESULTS:
+
 *** Greenland
 
 #+BEGIN_SRC jupyter-python :exports both
 P_GL = P.where(((P['y'] > 60) &
+                (P['y'] < 88) &
                 (P['x'] < 10) &
-                (P['x'] > -70)), drop=True)\
-        .fillna(0)\
-        .rio.write_crs('EPSG:4326')\
-        .rio.reproject(dst_crs = 'EPSG:3413',
-                       resolution = (25000, 25000),
-                       nodata = np.nan)
+                (P['x'] > -90)), drop=True)\
+        .rio\
+        .write_crs('EPSG:4326')\
+        .rio\
+        .reproject(dst_crs = 'EPSG:3413',
+                   resolution = (25000, 25000),
+                   nodata = np.nan)
 
-# P_GL = xr.merge([P_GL, Pt])
+P_GL = xr.merge([P_GL, Pt])
 
 print(P_GL)
 P_GL['salinity_ocean'].isel({'time':0}).plot()
@@ -472,28 +476,32 @@ P_GL.to_netcdf('ocean_PISM_GL.nc')
 :RESULTS:
 #+begin_example
 <xarray.Dataset>
-Dimensions:         (x: 166, y: 131, time: 132)
+Dimensions:         (x: 204, y: 128, time: 132, tb: 2)
 Coordinates:
-  ,* x               (x) float64 -1.392e+06 -1.367e+06 ... 2.708e+06 2.733e+06
-  ,* y               (y) float64 -1.25e+04 -3.75e+04 ... -3.238e+06 -3.263e+06
+  ,* x               (x) float64 -2.337e+06 -2.312e+06 ... 2.713e+06 2.738e+06
+  ,* y               (y) float64 -1.368e+05 -1.618e+05 ... -3.287e+06 -3.312e+06
   ,* time            (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
     z               float32 744.9
     spatial_ref     int64 0
+    time_bounds     (time, tb) datetime64[ns] 2000-01-01 ... 2011-01-01
+Dimensions without coordinates: tb
 Data variables:
     theta_ocean     (time, y, x) float32 nan nan nan nan nan ... nan nan nan nan
     salinity_ocean  (time, y, x) float32 nan nan nan nan nan ... nan nan nan nan
     basins          (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
+    time_bnds       (tb, time) datetime64[ns] 2000-01-01 ... 2010-12-01
 Attributes:
     xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
     fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
 #+end_example
-[[file:./figs_tmp/60d48a6ac5083099480b008f2904ae8276003859.png]]
+[[file:./figs_tmp/dd06943ffa6d257af3b6fce97892f9c21dfdca77.png]]
 :END:
 
 *** Antarctica
 
 #+BEGIN_SRC jupyter-python :exports both
 P_AQ = P.where(P['y'] < -60, drop=True)\
+        .where(P['basins'] > 0)\
         .rio.write_crs('EPSG:4326')\
         .rio.reproject(dst_crs = 'EPSG:3013',
                        resolution = (25000, 25000),
