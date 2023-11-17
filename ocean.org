@@ -28,6 +28,9 @@
     - [[#other][Other?]]
   - [[#designate-unique-basin-ids-for-each-shelf-or-groups-of-shelves][Designate unique basin IDs for each shelf or groups of shelves]]
   - [[#reformat-variables-and-netcdf-time-series-to-meet-pism-requirements][Reformat variables and NetCDF time series to meet PISM requirements]]
+    - [[#greenland][Greenland]]
+    - [[#antarctica][Antarctica]]
+  - [[#test-run-in-pism][Test run in PISM]]
 
 * Introduction
 
@@ -375,7 +378,6 @@ print("Depth layers: ", ds['z'].values)
 
 *** 800 m depth
 
-
 #+BEGIN_SRC jupyter-python :exports both
 ds_744 = ds[['pot_temp','salt']]\
     .where(ds['shoreface_Rignot'] > 0)\
@@ -419,6 +421,161 @@ _ = ds_250_800['salt'].isel(time=0).plot()
 
 ** Reformat variables and NetCDF time series to meet PISM requirements
 
-#+BEGIN_SRC jupyter-python :exports both
++ Let's use the *800 m depth* properties for this example.
 
+#+BEGIN_SRC jupyter-python :exports both
+P = ds[['pot_temp','salt','shoreface_Rignot']]\
+    .where(ds['shoreface_Rignot'] > 0)\
+    .sel(z=800, method='nearest')
+
+P = P.rename({'pot_temp':'theta_ocean',
+              'salt':'salinity_ocean',
+              'shoreface_Rignot':'basins'})
+
+P['salinity_ocean'].attrs['units'] = 'g/kg'
+P['theta_ocean'].attrs['units'] = 'Celsius'
+
+# Assume times are the start of period
+
+P['salinity_ocean'].attrs['bounds'] = 'time_bounds'
+P['theta_ocean'].attrs['bounds'] = 'time_bounds'
+
+bounds = np.stack((P['time'].values,P['time'].values))
+bounds[1,:-1] = bounds[1,1:]
+bounds[1,-1] = bounds[1,-1] + np.max(bounds[1,:]-bounds[0,:])
+
+Pt = P['time'].expand_dims(tb = 2).rename("time_bnds")
+Pt['time_bounds'] = (('time','tb'), bounds.T)
 #+END_SRC
+
+*** Greenland
+
+#+BEGIN_SRC jupyter-python :exports both
+P_GL = P.where(((P['y'] > 60) &
+                (P['x'] < 10) &
+                (P['x'] > -70)), drop=True)\
+        .fillna(0)\
+        .rio.write_crs('EPSG:4326')\
+        .rio.reproject(dst_crs = 'EPSG:3413',
+                       resolution = (25000, 25000),
+                       nodata = np.nan)
+
+# P_GL = xr.merge([P_GL, Pt])
+
+print(P_GL)
+P_GL['salinity_ocean'].isel({'time':0}).plot()
+
+P_GL.to_netcdf('ocean_PISM_GL.nc')
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+#+begin_example
+<xarray.Dataset>
+Dimensions:         (x: 166, y: 131, time: 132)
+Coordinates:
+  ,* x               (x) float64 -1.392e+06 -1.367e+06 ... 2.708e+06 2.733e+06
+  ,* y               (y) float64 -1.25e+04 -3.75e+04 ... -3.238e+06 -3.263e+06
+  ,* time            (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
+    z               float32 744.9
+    spatial_ref     int64 0
+Data variables:
+    theta_ocean     (time, y, x) float32 nan nan nan nan nan ... nan nan nan nan
+    salinity_ocean  (time, y, x) float32 nan nan nan nan nan ... nan nan nan nan
+    basins          (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
+Attributes:
+    xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
+    fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
+#+end_example
+[[file:./figs_tmp/60d48a6ac5083099480b008f2904ae8276003859.png]]
+:END:
+
+*** Antarctica
+
+#+BEGIN_SRC jupyter-python :exports both
+P_AQ = P.where(P['y'] < -60, drop=True)\
+        .rio.write_crs('EPSG:4326')\
+        .rio.reproject(dst_crs = 'EPSG:3013',
+                       resolution = (25000, 25000),
+                       nodata = np.nan)
+
+P_AQ['salinity_ocean'].isel({'time':0}).plot()
+print(P_AQ)
+P_AQ.to_netcdf('ocean_PISM_AQ.nc')
+#+END_SRC
+
+#+RESULTS:
+:RESULTS:
+#+begin_example
+<xarray.Dataset>
+Dimensions:         (x: 279, y: 268, time: 132)
+Coordinates:
+  ,* x               (x) float64 -3.346e+06 -3.321e+06 ... 3.579e+06 3.604e+06
+  ,* y               (y) float64 -6.669e+06 -6.694e+06 ... -1.332e+07 -1.334e+07
+  ,* time            (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
+    z               float32 744.9
+    spatial_ref     int64 0
+Data variables:
+    theta_ocean     (time, y, x) float32 nan nan nan nan nan ... nan nan nan nan
+    salinity_ocean  (time, y, x) float32 nan nan nan nan nan ... nan nan nan nan
+    basins          (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
+Attributes:
+    xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
+    fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
+#+end_example
+[[file:./figs_tmp/501d670d40045d840900d19a803e61f3b4fa12f4.png]]
+:END:
+
+
+** Test run in PISM
+
+#+BEGIN_SRC bash :exports both :results verbatim
+mpiexec -n 4 \
+	pismr \
+	-i ../pism_Greenland_5km_v1.1.nc \
+	-Mx 76 -My 141 -Mz 101 -Mbz 11 \
+	-z_spacing equal \
+	-Lz 4000 -Lbz 2000 \
+	-skip -skip_max 10 \
+	-grid.recompute_longitude_and_latitude false \
+	-grid.registration corner \
+	-surface given \
+	-surface_given_file ../pism_Greenland_5km_v1.1.nc \
+	-front_retreat_file ../pism_Greenland_5km_v1.1.nc \
+	-sia_e 3.0 \
+	-stress_balance ssa+sia \
+	-topg_to_phi 15.0,40.0,-300.0,700.0 \
+	-pseudo_plastic \
+	-pseudo_plastic_q 0.5 \
+	-till_effective_fraction_overburden 0.02 \
+	-tauc_slippery_grounding_lines \
+	-ts_file ts_g20km_10ka_hy.nc \
+	-extra_file ex_g20km_10ka_hy.nc \
+	-extra_vars diffusivity,temppabase,tempicethk_basal,bmelt,tillwat,velsurf_mag,mask,thk,topg,usurf,hardav,velbase_mag,tauc,tendency_of_ice_mass_due_to_discharge,basal_melt_rate_grounded,bmelt \
+	-bootstrap \
+	-ys 0 -ye 100 \
+	-extra_times 0:10:1000 \
+	-ts_times 0:yearly:1000 \
+	-ocean pico\
+	-ocean.pico.file ocean_PICO_GL.nc \
+	-ocean.pico.periodic no \
+	-frontal_melt.constant.melt_rate 100 \
+	-o g20km_1ka_ocean_PICO.nc 
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+--------------------------------------------------------------------------
+mpiexec was unable to find the specified executable file, and therefore
+did not launch the job.  This error was first reported for process
+rank 0; it may have occurred for other processes as well.
+
+NOTE: A common cause for this error is misspelling a mpiexec command
+      line parameter option (remember that mpiexec interprets the first
+      unrecognized command line token as the executable).
+
+Node:       t480
+Executable: pismr
+--------------------------------------------------------------------------
+4 total processes failed to start
+#+end_example
