@@ -25,6 +25,7 @@
   - [[#select-appropriate-t--s-for-each-cell][Select appropriate T & S for each cell]]
     - [[#800-m-depth][800 m depth]]
     - [[#average-of-top-800-m-depth][Average of top 800 m depth]]
+    - [[#other][Other?]]
   - [[#designate-unique-basin-ids-for-each-shelf-or-groups-of-shelves][Designate unique basin IDs for each shelf or groups of shelves]]
   - [[#reformat-variables-and-netcdf-time-series-to-meet-pism-requirements][Reformat variables and NetCDF time series to meet PISM requirements]]
 
@@ -361,6 +362,7 @@ Attributes:
 
 
 
+
 ** Select appropriate T & S for each cell
 
 #+BEGIN_SRC jupyter-python :exports both
@@ -379,53 +381,44 @@ ds_744 = ds[['pot_temp','salt']]\
     .where(ds['shoreface_Rignot'] > 0)\
     .sel(z=800, method='nearest')
 
-ds_744['salt'].isel(time=0).plot()
+_ = ds_744['salt'].isel(time=0).plot()
 #+END_SRC
 
 #+RESULTS:
-:RESULTS:
-: <matplotlib.collections.QuadMesh at 0x7fac7cf4e9b0>
-[[file:./figs_tmp/f1f782d7e105e0eb9bf7d88c861d4e4a1a2a608f.png]]
-:END:
+[[file:./figs_tmp/33bf2b448b62c2b98143297a1d47a2cd058c181b.png]]
 
 *** Average of top 800 m depth
 
 #+BEGIN_SRC jupyter-python :exports both
-print("Depth layers: ", ds['z'].values)
+ds_250_800 = ds[['pot_temp','salt']]\
+    .sel(z=slice(250,800))\
+    .where(ds['shoreface_Rignot'] > 0)
 
-ds_744 = ds[['pot_temp','salt']].sel(z=slice(0,800))
-print(ds_744)
+print("Averaging over depths: ", ds_250_800['z'].values)
+
+ds_250_800 = ds_250_800.mean(dim='z')
+
+_ = ds_250_800['salt'].isel(time=0).plot()
 #+END_SRC
 
 #+RESULTS:
-#+begin_example
-Depth layers:  [   6.      21.      43.5     77.25   127.875  203.812  317.719  488.578
-  744.867 1129.3   1705.95  2570.93  3868.39 ]
-<xarray.Dataset>
-Dimensions:      (time: 132, z: 9, y: 46, x: 72)
-Coordinates:
-  ,* time         (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
-  ,* x            (x) float32 -177.5 -172.5 -167.5 -162.5 ... 167.5 172.5 177.5
-  ,* y            (y) float32 -90.0 -86.0 -82.0 -78.0 ... 78.0 82.0 86.0 90.0
-  ,* z            (z) float32 6.0 21.0 43.5 77.25 127.9 203.8 317.7 488.6 744.9
-    spatial_ref  int64 0
-Data variables:
-    pot_temp     (time, z, y, x) float32 dask.array<chunksize=(1, 9, 46, 72), meta=np.ndarray>
-    salt         (time, z, y, x) float32 dask.array<chunksize=(1, 9, 46, 72), meta=np.ndarray>
-Attributes:
-    xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
-    fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
-#+end_example
+:RESULTS:
+: Averaging over depths:  [317.719 488.578 744.867]
+[[file:./figs_tmp/af93f6977ef08a8a826991fa60c5bd4718a2b26a.png]]
+:END:
 
+*** Other?
 
 + Depth of nearby continental shelf edge?
-+ HUD algorithm from recent Maths On Ice talk?
-+ Other options?
++ Basin fill from GZ to shelf edge?
 
 ** Designate unique basin IDs for each shelf or groups of shelves
 
-+ See existing work on this topic?
++ See =shoreface_Rignot= in =lime_roi.nc=
++ May need to start from 1 depending on what PISM needs?
 
 ** Reformat variables and NetCDF time series to meet PISM requirements
 
+#+BEGIN_SRC jupyter-python :exports both
 
+#+END_SRC
