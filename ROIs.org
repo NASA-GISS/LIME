@@ -1,0 +1,206 @@
+#+TITLE: ModelE Land Ice (LIME) Regions of Interest (ROI) metadata
+#+AUTHOR: Ken Mankoff
+#+EMAIL: ken.mankoff@nasa.gov
+
+#+OPTIONS:   H:4 num:4 toc:4 \n:nil ::t |:t ^:{} -:t f:t *:t <:t
+
+#+PROPERTY: header-args :eval no-export :noweb yes :comments both
+#+PROPERTY: header-args:bash+ :session (concat "*" (file-name-sans-extension (buffer-name)) "-shell*")
+#+PROPERTY: header-args:bash+ :tangle-mode (identity #o744) :shebang #!/usr/bin/env bash
+#+PROPERTY: header-args:jupyter-python+ :session LIME_ocean :kernel ds
+
+* Table of contents                               :toc_4:noexport:
+- [[#land-ice-regions-of-interest][Land ice regions of interest]]
+- [[#introduction][Introduction]]
+- [[#background][Background]]
+- [[#land-ice-roi-from-rgi][Land Ice ROI from RGI]]
+- [[#landice-roi-w-rignot-basins][Landice ROI w/ Rignot basins]]
+  - [[#display][Display]]
+
+* Land ice regions of interest
+
++ Create regions of interest (ROIs) for land ice based on RGI
++ Historically, there are two land ice regions
+  + Southern Hemisphere (Antarctica)
+  + Northern Hemisphere (Alaska, Canada, Greenland, Iceland, Svalbard, and Russia)
++ Simplistic treatment means implicit mass transfer between f.ex. Greenland and Alaska
++ Better to have more regions
+
+* Introduction
+
++ Build ModelE Land Ice ROIs based on RGI
+  + http://www.glims.org/rgi_user_guide/02_regions_definition.html
++ Repeat, but add Greenland and Antarctic ice sheet ROIs based on IMBIE Rignot basins
+  + http://imbie.org/imbie-3/drainage-basins/
+
+* Background
+
+from https://en.wikipedia.org/wiki/List_of_rivers_by_discharge
+
+#+CAPTION: Discharge from various river sources (S) relative to annual runoff from Greenland (G), Greenland maximum (G_m), and Greenland max but all in 3 month period. This takes Greenlandic seasonality into account. We have not addressed river seasonality. Note columns showing G*,S ratios have source S in numerator or denominator.
+#+NAME: discharge
+| Source           | Discharge [m^3/s] | Comment        |       S/G |      G_m/S |     G_m3/S |
+|------------------+-------------------+----------------+-----------+------------+------------|
+| Amazon           |            224000 | Largest        | 14.137844 | 0.20089286 | 0.80357143 |
+| Ganges           |             43900 | 2nd largest    | 2.7707650 |  1.0250569 |  4.1002278 |
+| Mississippi      |             18434 | Gulf           | 1.1634688 |  2.4411414 |  9.7645655 |
+| Greenland        |             15844 | ~500 km^3/yr   |         1 |  2.8401919 |  11.360767 |
+| Greenland_Max    |             45000 | 3x?            | 2.8401919 |          1 |          4 |
+| Greenland_Max_3m |           45000*4 | Amount in 3 mo | 11.360767 |       0.25 |          1 |
+#+TBLFM: $4=($2/@5$2)::$5=(@6$2/$2)::$6=(@7$2/$2)
+
++ At present, Greenland is approx equal to Mississippi, Ganges is 3x Greenland, and Amazon is 14x
++ When looking at 3-month Greenland discharge period and high runoff years, Greenland is approx equal to Mississippi, 4x Ganges, and 10 Mississippi.
+
+** COMMENT Frink
+
+#+header: :var tbl=discharge
+#+BEGIN_SRC bash :exports none :results verbatim :prologue "function frink() { java -cp ~/local/frink.jar frink.parser.Frink -f ~/local/frink_units.txt -e \"$@\" ; }" 
+
+echo -n "Greenland: "
+frink "500 km^3/year"
+
+for key in "${!tbl[@]}"; do
+  river=${key}
+  discharge=$(echo ${tbl[${key}]} |cut -d" " -f1)
+
+  echo -n "${key}: "
+  frink "${discharge} m^3/s"
+  echo -n "(${key} / Greenland) Ratio: "
+  frink "(${discharge} m^3/s) / (500 km^3/year)"
+done | sort
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+Greenland: 15844.382320420091341 m^3 s^-1 (flow)
+Amazon: 224000 m^3 s^-1 (flow)
+(Amazon / Greenland) Ratio: 14.1375028366559232
+Ganges: 43900 m^3 s^-1 (flow)
+(Ganges / Greenland) Ratio: 2.77069810057676352
+Greenland: 15844 m^3 s^-1 (flow)
+(Greenland / Greenland) Ratio: 0.99997587028560913921
+Greenland_Max_3m: 180000 m^3 s^-1 (flow)
+(Greenland_Max_3m / Greenland) Ratio: 11.360493350884224
+Greenland_Max: 45000 m^3 s^-1 (flow)
+(Greenland_Max / Greenland) Ratio: 2.840123337721056
+Mississippi: 18434 m^3 s^-1 (flow)
+(Mississippi / Greenland) Ratio: 1.1634407468344432512
+#+end_example
+
+
+* Land Ice ROI from RGI
+
+#+BEGIN_SRC bash :exports both :results verbatim
+rm -fR G_LIME_ROI
+grass -c EPSG:4326 -e G_LIME_ROI
+grass ./G_LIME_ROI/PERMANENT
+
+export GRASS_OVERWRITE=1
+fgice=${DATADIR}/ModelE_Support/prod_input_files/Z2HX2fromZ1QX1N.BS1.nc
+ncdump -h $fgice
+ncdump -v lat,lon $fgice
+# lon=144, lat=90
+# 2x2.5 = +- 1 lat and +- 1.25 lon
+
+r.in.gdal -o input=NETCDF:"${DATADIR}/ModelE_Support/prod_input_files/Z2HX2fromZ1QX1N.BS1.nc":fgice output=fgice
+r.in.gdal -o input=NETCDF:"${DATADIR}/ModelE_Support/prod_input_files/Z2HX2fromZ1QX1N.BS1.nc":focean output=focean
+g.region raster=fgice
+g.region -ps
+
+v.in.ogr input=${DATADIR}/RGI/RGI2000-v7.0-o1regions.shp output=RGI
+v.db.addcolumn RGI col="region integer"
+v.db.update RGI col=region qcol="o1region"
+v.to.rast input=RGI output=RGI use=attr attribute_column=region
+
+# Force all of Antarctica to be Region 19
+r.mapcalc "landice_RGI = if((fgice > 0) & (y() > 0), RGI) + if((fgice > 0) & (y() < 0), 19)"
+r.null map=landice_RGI setnull=0
+
+r.grow.distance input=landice_RGI value=dist maximum_distance=2.5
+r.mapcalc "shoreface_RGI = if(focean, dist)" --o
+r.null map=shoreface_RGI setnull=0
+#+END_SRC
+
+* Landice ROI w/ Rignot basins
+
+#+BEGIN_SRC bash :exports both :results verbatim
+grass ./G_LIME_ROI/PERMANENT
+g.mapset -c Rignot
+
+g.region -p
+v.import input=${DATADIR}/IMBIE/Rignot/GRE_Basins_IMBIE2_v1.3.shp output=GRE
+v.import input=${DATADIR}/IMBIE/Rignot/ANT_Basins_IMBIE2_v1.6.shp output=ANT
+
+v.db.droprow input=GRE where='SUBREGION1 == "ICE_CAP"' output=GRE_nocaps
+g.rename vector=GRE_nocaps,GRE --o
+
+v.to.rast input=ANT output=ANT use=cat
+v.to.rast input=GRE output=GRE use=cat
+
+# ModelE land ice is a bit larger, so we grow these outward
+r.grow.distance input=GRE value=GRE_grow
+r.grow.distance input=ANT value=ANT_grow
+
+r.mapcalc "GRE_Rignot = if(landice_RGI == 5, GRE_grow, null())"
+r.mapcalc "ANT_Rignot = if(landice_RGI == 19, ANT_grow, null())"
+
+r.patch -s input=GRE_Rignot,ANT_Rignot output=landice_Rignot
+
+# Ocean basins for each ROI
+r.grow.distance input=landice_Rignot value=dist maximum_distance=2.5
+r.mapcalc "shoreface_Rignot = if(focean, dist)" --o
+r.null map=shoreface_Rignot setnull=0
+
+# for some reason, making a group and writing 2-band NetCDF works above.
+# I seem to be running into a bug here using i.group
+# NetCDF is =ushort= type and Xarray crashes when it tries to read it.
+
+i.group group=lime_meta_basins input=landice_RGI,shoreface_RGI,landice_Rignot,shoreface_Rignot
+r.out.gdal -mc input=lime_meta_basins output=lime_roi.nc format=netCDF
+
+ncrename -h -v Band1,landice_RGI lime_roi.nc
+ncatted -h -a long_name,landice_RGI,o,c,landice_RGI lime_roi.nc
+ncatted -h -a comment,landice_RGI,o,c,"landice RGI region" lime_roi.nc
+
+ncrename -h -v Band2,shoreface_RGI lime_roi.nc
+ncatted -h -a long_name,shoreface_RGI,o,c,shoreface_RGI lime_roi.nc
+ncatted -h -a comment,shoreface_RGI,o,c,"shoreface RGI region" lime_roi.nc
+
+ncrename -h -v Band3,landice_Rignot lime_roi.nc
+ncatted -h -a long_name,landice_Rignot,o,c,landice_Rignot lime_roi.nc
+ncatted -h -a comment,landice_Rignot,o,c,"landice Rignot basins" lime_roi.nc
+
+ncrename -h -v Band4,shoreface_Rignot lime_roi.nc
+ncatted -h -a long_name,shoreface_Rignot,o,c,shoreface_Rignot lime_roi.nc
+ncatted -h -a comment,shoreface_Rignot,o,c,"shoreface Rignot basins" lime_roi.nc
+
+ncatted -a Creator,global,o,c,"Ken Mankoff <ken.mankoff@nasa.gov>" lime_roi.nc
+#+END_SRC
+
+** Display
+
++ Note - hard to see what's going on here.
+  + Antarctica ROIs adjusted from 19 to 19XX, dominating color range.
+  + Greenland ROI adjusted from 5 to 5Y.
+    + XX and Y are unique CAT from Rignot shapefile
+
+#+BEGIN_SRC jupyter-python :exports both :dir .
+import xarray as xr
+import matplotlib.pyplot as plt
+
+ds=xr.open_dataset('lime_roi.nc')
+
+vars = ['landice_RGI','shoreface_RGI','landice_Rignot','shoreface_Rignot']
+fig, axs = plt.subplots(2,2)
+axs = axs.flatten()
+for i,v in enumerate(vars):
+    ds[v].plot(ax=axs[i])
+    if i != 0:
+        axs[i].set_yticklabels([])
+        axs[i].axes.get_yaxis().set_visible(False)
+#+END_SRC
+
+#+RESULTS:
+[[file:./figs_tmp/9d2fc6bd74eb8cdcbbe190bb78fe30c5dda214c0.png]]
+
