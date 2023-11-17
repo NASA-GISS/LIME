@@ -1,0 +1,261 @@
+#+TITLE: ModelE Land Ice (LIME) Ocean Coupling
+#+AUTHOR: Ken Mankoff
+#+EMAIL: ken.mankoff@nasa.gov
+
+#+OPTIONS:   H:4 num:4 toc:4 \n:nil ::t |:t ^:{} -:t f:t *:t <:t
+
+#+PROPERTY: header-args :eval no-export :noweb yes :comments both
+#+PROPERTY: header-args:bash+ :session (concat "*" (file-name-sans-extension (buffer-name)) "-shell*")
+#+PROPERTY: header-args:bash+ :tangle-mode (identity #o744) :shebang #!/usr/bin/env bash
+#+PROPERTY: header-args:jupyter-python+ :session LIME_ocean :kernel ds :dir .
+
+* Table of contents                               :toc_4:noexport:
+- [[#introduction][Introduction]]
+- [[#summary][Summary]]
+- [[#implementation][Implementation]]
+  - [[#post-process-modele-outputs][Post-process ModelE outputs]]
+  - [[#reproject-from-modele-grid-to-pism-grid][Reproject from ModelE grid to PISM grid]]
+    - [[#open-all-oij-files-into-one-xarray-data-cube][Open all oij files into one xarray data cube]]
+    - [[#add-metadata-and-tidy-a-bit][Add metadata and tidy a bit]]
+      - [[#print][Print]]
+      - [[#plot][Plot]]
+  - [[#select-appropriate-depth-for-each-ice-shelf][Select appropriate depth for each ice shelf]]
+  - [[#designate-unique-basin-ids-for-each-shelf-or-groups-of-shelves][Designate unique basin IDs for each shelf or groups of shelves]]
+  - [[#reformat-variables-and-netcdf-time-series-to-meet-pism-requirements][Reformat variables and NetCDF time series to meet PISM requirements]]
+
+* Introduction
+
+Notes, code, and documentation on coupling the ModelE ocean with PISM.
+
+Eventual goal is bi-directional coupling so that ModelE ocean (temperature, salinity) forces PISM, and PISM freshwater is returned to ModelE.
+
+At the moment coupling is one-way: We drive PISM with ModelE, using monthly coupling.
+
+* Summary
+
+This summary may be out of date. See TOC, section headings, and code within for definitive code used to generate the products. Work plan is, roughly:
+
++ Select ModelE ocean cells bordering Antarctica and Greenland
+  + Extract =pot_temp=, =salinity=, and other needed metadata
++ Reproject from ModelE grid to PISM grid
++ Select relevant depth of ocean properties
+  + GZ draft, bathymetric routing to shelf break, etc.
+
+* Implementation
+
+** Post-process ModelE outputs
+
+#+BEGIN_SRC bash :exports both :results verbatim
+RUNNAME=E1oM20_r01
+
+month=($(locale mon|tr '[:lower:]' '[:upper:]'| tr ';' '\n' |cut -c1-3))
+year=($(ls ${CMRUNDIR}/${RUNNAME}/JAN????.acc${RUNNAME}.nc| rev | cut -d'/' -f1 | rev | cut -c4-7))
+
+parallel "scaleacc ${CMRUNDIR}/${RUNNAME}/{1}{2}.acc${RUNNAME}.nc oijl" ::: ${month[@]} ::: ${year[@]}
+
+# # alternate
+# for m in ${month[@]}; do
+#   for y in ${year[@]}; do
+#     scaleacc ${CMRUNDIR}/${RUNNAME}/${m}${y}.acc${RUNNAME}.nc oijl
+#   done
+# done
+
+# need oceanfr, landfr, landicefr which are all in aij file
+# aj,ajl,aijl,aijk,ijhc
+scaleacc ${CMRUNDIR}/${RUNNAME}/${month[0]}${year[0]}.acc${RUNNAME}.nc aij 
+mv ${month[0]}${year[0]}.aij${RUNNAME}.nc aij.nc
+#+END_SRC
+
+** Reproject from ModelE grid to PISM grid
+
++ WARN :: Use nearest neighbor sampling otherwise interpolation would occur, which might be OK for T or S, but unlikely to produce reasonable density which is ~f(T,S)~.
+
++ ModelE grid is EPSG:3413
++ PISM AQ: EPSG:3031
++ PISM GL: EPSG:3413
+
+*** Open all oij files into one xarray data cube
+
+#+BEGIN_SRC jupyter-python :exports both
+import rioxarray
+import xarray as xr
+import glob
+import calendar
+
+mon2num = {month.upper(): index for index, month in enumerate(calendar.month_abbr) if month}
+
+i = 0
+def add_dims(xda):
+    global i
+    i=i+1
+    f = xda.encoding['source']
+    m = f.split('/')[-1][0:3] # year
+    y = f.split('/')[-1][3:7] # year
+    dt = pd.Timestamp(year=int(y), month=mon2num[m], day=1)
+    if i < 10: print(f'{i}/{len(ncfiles)},{y},{m},{dt},{f}') if i < 10 else print("etc...")
+    if i == 10: print("etc...")
+    xda = xda.expand_dims(time = [dt])
+    return xda
+
+ncfiles = glob.glob("*oijl*.nc")
+ds_raw = xr.open_mfdataset(ncfiles,
+                           preprocess = add_dims,
+                           combine = 'by_coords',
+                           parallel = True)
+#+END_SRC
+
+#+RESULTS:
+: 1/132,2009,SEP,2009-09-01 00:00:00,/home/kdm/projects/GISS/docs/SEP2009.oijlE1oM20_r01.nc
+: 2/132,2002,JUL,2002-07-01 00:00:00,/home/kdm/projects/GISS/docs/JUL2002.oijlE1oM20_r01.nc
+: 3/132,2001,APR,2001-04-01 00:00:00,/home/kdm/projects/GISS/docs/APR2001.oijlE1oM20_r01.nc
+: 4/132,2003,FEB,2003-02-01 00:00:00,/home/kdm/projects/GISS/docs/FEB2003.oijlE1oM20_r01.nc
+: 5/132,2009,FEB,2009-02-01 00:00:00,/home/kdm/projects/GISS/docs/FEB2009.oijlE1oM20_r01.nc
+: 6/132,2000,FEB,2000-02-01 00:00:00,/home/kdm/projects/GISS/docs/FEB2000.oijlE1oM20_r01.nc
+: 7/132,2003,JUL,2003-07-01 00:00:00,/home/kdm/projects/GISS/docs/JUL2003.oijlE1oM20_r01.nc
+: 8/132,2008,JUN,2008-06-01 00:00:00,/home/kdm/projects/GISS/docs/JUN2008.oijlE1oM20_r01.nc
+: 9/132,2004,MAR,2004-03-01 00:00:00,/home/kdm/projects/GISS/docs/MAR2004.oijlE1oM20_r01.nc
+: etc...
+
+#+BEGIN_SRC jupyter-python :exports both
+print(ds_raw)
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+<xarray.Dataset>
+Dimensions:       (time: 132, lono: 72, lono2: 72, lato: 46, lato2: 46,
+                   zoc: 13, zoce: 13)
+Coordinates:
+  ,* time          (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
+  ,* lono          (lono) float32 -177.5 -172.5 -167.5 ... 167.5 172.5 177.5
+  ,* lono2         (lono2) float32 -175.0 -170.0 -165.0 ... 170.0 175.0 180.0
+  ,* lato          (lato) float32 -90.0 -86.0 -82.0 -78.0 ... 78.0 82.0 86.0 90.0
+  ,* lato2         (lato2) float32 -90.0 -88.0 -84.0 -80.0 ... 80.0 84.0 88.0
+  ,* zoc           (zoc) float32 6.0 21.0 43.5 ... 1.706e+03 2.571e+03 3.868e+03
+  ,* zoce          (zoce) float32 12.0 30.0 57.0 ... 2.052e+03 3.09e+03 4.647e+03
+Data variables: (12/34)
+    oxyp          (time, lato, lono) float32 dask.array<chunksize=(1, 46, 72), meta=np.ndarray>
+    mo            (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    mou           (time, zoc, lato, lono2) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    mov           (time, zoc, lato2, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    oxyp3         (time, zoce, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    heat          (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    ...            ...
+    sgmflx_z      (time, zoce, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    pot_temp      (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    pot_dens      (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    pot_dens2000  (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    dens          (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    mfw2          (time, zoce, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+Attributes:
+    xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
+    fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
+#+end_example
+
+*** Add metadata and tidy a bit
+
+#+BEGIN_SRC jupyter-python :exports both
+ds = ds_raw.rio.write_crs("epsg:4326")
+
+ds = ds.rename({'lono':'x', 'lato':'y'}) # or rio.set_spatial_dims()
+ds = ds[['pot_temp','salt']]
+
+
+# add some AIJ metadata
+meta_aij = xr.open_dataset('aij.nc')
+ds['oceanfr'] = (('y','x'), meta_aij['ocnfr'].data)
+ds['landicefr'] = (('y','x'), meta_aij['landicefr'].data)
+ds['landfr'] = (('y','x'), meta_aij['landfr'].data)
+
+
+# add some land ice regional metadata
+meta_roi = xr.open_dataset('~/projects/GISS/notes/lime_roi.nc')
+
+# match dimensions
+meta_roi = meta_roi.rename({'lon':'x','lat':'y'}).interp_like(ds, method="nearest")
+for vstr in ['landice_RGI','shoreface_RGI','landice_Rignot','shoreface_Rignot']:
+    v = meta_roi[vstr]
+    ds[vstr] = (('y','x'), v.data)
+#+END_SRC
+
+#+RESULTS:
+
+**** Print 
+
+#+BEGIN_SRC jupyter-python :exports both
+print(ds)
+#+END_SRC
+
+#+RESULTS:
+#+begin_example
+<xarray.Dataset>
+Dimensions:           (time: 132, zoc: 13, y: 46, x: 72)
+Coordinates:
+  ,* time              (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
+  ,* x                 (x) float32 -177.5 -172.5 -167.5 ... 167.5 172.5 177.5
+  ,* y                 (y) float32 -90.0 -86.0 -82.0 -78.0 ... 82.0 86.0 90.0
+  ,* zoc               (zoc) float32 6.0 21.0 43.5 ... 2.571e+03 3.868e+03
+    spatial_ref       int64 0
+Data variables:
+    pot_temp          (time, zoc, y, x) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    salt              (time, zoc, y, x) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
+    oceanfr           (y, x) float32 0.0 0.0 0.0 0.0 ... 100.0 100.0 100.0 100.0
+    landicefr         (y, x) float32 100.0 100.0 100.0 100.0 ... 0.0 0.0 0.0 0.0
+    landfr            (y, x) float32 100.0 100.0 100.0 100.0 ... 0.0 0.0 0.0 0.0
+    landice_RGI       (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
+    shoreface_RGI     (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
+    landice_Rignot    (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
+    shoreface_Rignot  (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
+Attributes:
+    xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
+    fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
+#+end_example
+
+**** Plot
+
+***** Data
+#+BEGIN_SRC jupyter-python :exports both
+_ = ds['salt']\
+    .isel({'time':[0,6]})\
+    .isel({'zoc':0})\
+    .plot(col="time", robust=True)
+#+END_SRC
+
+#+RESULTS:
+[[file:./figs_tmp/127d3865bd4486de15405c0a695c1a08a6ec67e7.png]]
+
+***** Metadata
+
+#+BEGIN_SRC jupyter-python :exports both
+import matplotlib.pyplot as plt
+
+vars = ['landice_RGI','shoreface_RGI','landice_Rignot','shoreface_Rignot']
+fig, axs = plt.subplots(2,2)
+axs = axs.flatten()
+for i,v in enumerate(vars):
+    ds[v].plot(ax=axs[i])
+    axs[i].set_title("")
+    axs[i].set_ylim([-90,90])
+    if i != 0:
+        axs[i].set_yticklabels([])
+        axs[i].axes.get_yaxis().set_visible(False)
+#+END_SRC
+
+#+RESULTS:
+[[file:./figs_tmp/9675838c30f9431d6ecd9fe08a5c823841b5f03d.png]]
+
+
+
+** Select appropriate depth for each ice shelf
+
++ Depth of nearby continental shelf edge?
++ HUD algorithm from recent Maths On Ice talk?
++ Other options?
+
+** Designate unique basin IDs for each shelf or groups of shelves
+
++ See existing work on this topic?
+
+** Reformat variables and NetCDF time series to meet PISM requirements
+
+
