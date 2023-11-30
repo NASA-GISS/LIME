@@ -1,0 +1,79 @@
+#+TITLE: ModelE notes
+
+* Table of contents                               :toc_2:noexport:
+- [[#introduction][Introduction]]
+- [[#some-runs][Some runs]]
+  - [[#ocean][Ocean]]
+
+* Introduction
+
++ Notes on the NASA GISS ModelE
+
+* Some runs
+
+| Template | Comment                      |
+|----------+------------------------------|
+| E4M20    | 4x5 resolution qflux ocean   |
+| E1oM20   | 4x5 dynamic ocean            |
+| E6F40    | 2x2.5 resolution qflux ocean |
+| E1F40o13 | 2x2.5 dynamic 13 layer ocean |
+| E1F40o32 | 2x2.5 dynamic 32 layer ocean |
+
+** Ocean
+
+*** Build rundeck and compile
+**** E1oM20
+
+#+BEGIN_SRC bash
+cd ~/projects/GISS/modelE_2.1_branch/decks
+
+RUNNAME=E1oM20_r01
+
+make rundeck RUN=${RUNNAME} RUNSRC=E1oM20 OVERWRITE=YES
+
+ # YEARI=1999,MONTHI=12,DATEI=1,HOURI=0,
+ # YEARE=2011,MONTHE=1,DATEE=1,HOURE=0,     KDIAG=13*0,
+ # ISTART=2,IRANDI=0, YEARE=1999,MONTHE=12,DATEE=1,HOURE=1,JWRITE=1
+                                 
+make clean RUN=${RUNNAME}
+make -j setup RUN=${RUNNAME} EXTRA_FFLAGS="-Ddbgcsv_silent"
+#+END_SRC
+
+*** First run
+
+**** Run 1 hour
+#+BEGIN_SRC bash
+../exec/runE ${RUNNAME} -cold-restart -np 2
+#+END_SRC
+
+**** Run longer until {YEAR,MONTH,DATE,HOUR}E defined in I
+
+#+BEGIN_SRC bash
+../exec/runE ${RUNNAME} -np 2
+#+END_SRC
+
+Examine outputs in run folder...
+
+*** Postprocess
+
++ From decks folder
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${RUNNAME}/
+
+mkdir post
+cd post
+
+# annual sum of first 20 years
+sumfiles ../???10{0,1}[0-9]* # ANN1000-1019.acc${RUNNAME}.nc
+
+# monthly sum of first 20 years
+MONTHS=$(locale mon|tr '[:lower:]' '[:upper:]'| tr ';' '\n' |cut -c1-3)
+YEARS=$(seq 1000 1019|tr '\n' ','| sed 's/,$//')
+parallel "sumfiles ../{1}10[0-1][0-9]*" ::: ${MONTHS}
+
+
+scaleacc ANN1000-1019.acc${RUNNAME}.nc aij,aj,ajl,aijl,aijk,ijhc
+ncview ANN1000-1019.aij${RUNNAME}.nc
+# look at "impm_lndice", "MICB", etc.
+#+END_SRC
