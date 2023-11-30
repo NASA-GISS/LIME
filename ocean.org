@@ -21,15 +21,12 @@
   - [[#reproject][Reproject]]
     - [[#greenland][Greenland]]
     - [[#antarctica][Antarctica]]
-  - [[#notdone-make-3d][NOTDONE Make 3D]]
-    - [[#greenland-1][Greenland]]
-    - [[#antarctica-1][Antarctica]]
   - [[#export-to-netcdf][Export to NetCDF]]
     - [[#display][Display]]
     - [[#merge-modele-output-with-lime-metadata][Merge ModelE output with LIME metadata]]
     - [[#select-appropriate-t--s-depth-for-each-cell][Select appropriate T & S depth for each cell]]
     - [[#notdone-select-appropriate-t--s-for-each-basin][NOTDONE Select appropriate T & S for each basin]]
-    - [[#notdone-create-basin-ids][NOTDONE Create basin IDs]]
+    - [[#create-basin-ids][Create basin IDs]]
     - [[#reformat-to-meet-pism-requirements][Reformat to meet PISM requirements]]
   - [[#test-run-in-pism][Test run in PISM]]
 
@@ -174,38 +171,6 @@ done
 exit
 #+END_SRC
 
-** NOTDONE Make 3D
-*** Greenland
-
-#+BEGIN_SRC bash :exports both :results verbatim
-g.region t=13 -p3
-
-rasters=$(g.list type=raster pattern=salt_* sep=,)
-r.to.rast3 input=${rasters} output=salt 
-# r3.out.netcdf -p input=salt output=salt_AQ.nc
-
-rasters=$(g.list type=raster pattern=temp_* sep=,)
-r.to.rast3 input=${rasters} output=temp
-# r3.out.netcdf -p input=temp output=temp_AQ.nc
-
-#+END_SRC
-
-*** Antarctica
-
-#+BEGIN_SRC bash :exports both :results verbatim
-g.region t=13 -p3
-
-rasters=$(g.list type=raster pattern=salt_* sep=,)
-r.to.rast3 input=${rasters} output=salt 
-# r3.out.netcdf -p input=salt output=salt_AQ.nc
-
-rasters=$(g.list type=raster pattern=temp_* sep=,)
-r.to.rast3 input=${rasters} output=temp
-# r3.out.netcdf -p input=temp output=temp_AQ.nc
-
-#+END_SRC
-
-
 ** Export to NetCDF
 
 #+BEGIN_SRC jupyter-python :exports both
@@ -305,7 +270,22 @@ gl = gl.sel({'z':slice(0,800)}).mean(dim='z')
 
 #+RESULTS:
 
-*** NOTDONE Create basin IDs
+*** Create basin IDs
+
+#+BEGIN_SRC jupyter-python :exports both
+basins = aq['shoreface_basins_100'].values
+for i,b in enumerate(np.unique(basins)):
+    if np.isnan(b): basins[np.isnan(basins)] = 0
+    basins[basins == b] = i+1
+aq['basins'] = (('y','x'), basins)    
+
+basins = gl['shoreface_basins_100'].values
+for i,b in enumerate(np.unique(basins)):
+    if np.isnan(b): basins[np.isnan(basins)] = 0
+    basins[basins == b] = i+1
+gl['basins'] = (('y','x'), basins)
+#+END_SRC
+
 
 *** Reformat to meet PISM requirements
 
@@ -314,30 +294,13 @@ aq = aq.rename({'temp':'theta_ocean',
                 'salt':'salinity_ocean'})
 aq['theta_ocean'].attrs['units'] = 'Celsius'
 aq['salinity_ocean'].attrs['units'] = 'g/kg'
-
-basins = aq['shoreface_basins_100'].values
-for i,b in enumerate(np.unique(basins)):
-    if np.isnan(b): basins[np.isnan(basins)] = 0
-    basins[basins == b] = i
-aq['basins'] = (('y','x'), basins)    
-
-# aq['basins'] = ((b-b.min())/(b.max()-b.min()) * (np.unique(b.values).size - 1))
-
 aq.to_netcdf('ocean_PICO_AQ.nc')
 
 gl = gl.rename({'temp':'theta_ocean',
                 'salt':'salinity_ocean'})
 gl['theta_ocean'].attrs['units'] = 'Celsius'
 gl['salinity_ocean'].attrs['units'] = 'g/kg'
-
-basins = gl['shoreface_basins_100'].values
-for i,b in enumerate(np.unique(basins)):
-    if np.isnan(b): basins[np.isnan(basins)] = 0
-    basins[basins == b] = i
-gl['basins'] = (('y','x'), basins)
-
 gl.to_netcdf('ocean_PICO_GL.nc')
-
 #+END_SRC
 
 ** Test run in PISM
