@@ -1,0 +1,452 @@
+#+TITLE: ModelE Land Ice (LIME) metadata
+#+AUTHOR: Ken Mankoff
+#+EMAIL: ken.mankoff@nasa.gov
+
+#+OPTIONS:   H:4 num:4 toc:4 \n:nil ::t |:t ^:{} -:t f:t *:t <:t
+
+#+PROPERTY: header-args :eval no-export :noweb yes :comments both
+#+PROPERTY: header-args:bash+ :session (concat "*" (file-name-sans-extension (buffer-name)) "-shell*")
+#+PROPERTY: header-args:bash+ :tangle-mode (identity #o744) :shebang #!/usr/bin/env bash
+#+PROPERTY: header-args:jupyter-python+ :session LIME_ocean :kernel ds
+
+* Table of contents                               :toc_4:noexport:
+- [[#introduction][Introduction]]
+- [[#modele-domain][ModelE domain]]
+  - [[#land-ice-roi-from-rgi][Land Ice ROI from RGI]]
+  - [[#landice-roi-w-rignot-basins][Landice ROI w/ Rignot basins]]
+  - [[#display][Display]]
+  - [[#export-to-netcdf][Export to NetCDF]]
+  - [[#display-1][Display]]
+- [[#pism-domains][PISM domains]]
+  - [[#greenland][Greenland]]
+    - [[#set-up][Set up]]
+    - [[#import-rignot-basins][Import Rignot basins]]
+    - [[#clean-up-basins][Clean up basins]]
+    - [[#display-2][Display]]
+  - [[#antarctica][Antarctica]]
+    - [[#set-up-1][Set up]]
+    - [[#import-rignot-basins-1][Import Rignot basins]]
+    - [[#clean-up-basins-1][Clean up basins]]
+    - [[#display-3][Display]]
+  - [[#export-to-netcdf-1][Export to NetCDF]]
+  - [[#display-4][Display]]
+
+* Introduction
+
+The workbook is used to document the generation of geospatial (GIS) metadata for the ModelE Land Ice (LIME) effort. It includes
+
++ RGI regions for ModelE land ice regions
+  + http://www.glims.org/rgi_user_guide/02_regions_definition.html
++ Rignot basins for ModelE Greenland and Antarctic land ice 
+  + http://imbie.org/imbie-3/drainage-basins/
++ Nearby ocean cells (shoreface) for RGI regions and Rignot basins
++ Various ocean depth metrics at ModelE resolution. For example,
+  + Median depth from BedMachine
+  + Maximum depth
++ All of the above on a global lat/lon map at 4x5 or 2x2.5 degree resolution
++ All of the above converted to PISM Greenland and Antarctic projections and resolution
+
+* ModelE domain  
+
+** Land Ice ROI from RGI
+
+#+BEGIN_SRC bash :exports both :results verbatim
+rm -fR G_ModelE
+grass -c EPSG:4326 -e G_ModelE
+grass ./G_ModelE/PERMANENT
+
+export GRASS_OVERWRITE=1
+fgice=${DATADIR}/ModelE_Support/prod_input_files/Z2HX2fromZ1QX1N.BS1.nc
+ncdump -h $fgice
+ncdump -v lat,lon $fgice
+# lon=144, lat=90
+# 2x2.5 = +- 1 lat and +- 1.25 lon
+
+r.in.gdal -o input=NETCDF:"${DATADIR}/ModelE_Support/prod_input_files/Z2HX2fromZ1QX1N.BS1.nc":fgice output=fgice
+r.in.gdal -o input=NETCDF:"${DATADIR}/ModelE_Support/prod_input_files/Z2HX2fromZ1QX1N.BS1.nc":focean output=focean
+g.region raster=fgice
+g.region -ps
+
+r.mapcalc "x = x()"
+r.mapcalc "y = y()"
+
+g.mapset -c RGI
+v.in.ogr input=${DATADIR}/RGI/RGI2000-v7.0-o1regions.shp output=RGI
+v.db.addcolumn RGI col="region integer"
+v.db.update RGI col=region qcol="o1region"
+v.to.rast input=RGI output=RGI use=attr attribute_column=region
+
+# Force all of Antarctica to be Region 19
+r.mapcalc "landice = if((fgice > 0) & (y() > 0), RGI) + if((fgice > 0) & (y() < 0), 19)"
+r.null map=landice setnull=0
+
+r.grow.distance input=landice value=dist maximum_distance=2.5
+r.mapcalc "shoreface = if(focean, dist)" --o
+r.null map=shoreface setnull=0
+#+END_SRC
+
+** Landice ROI w/ Rignot basins
+
+#+BEGIN_SRC bash :exports both :results verbatim
+g.mapset -c Rignot
+
+g.region -p
+v.import input=${DATADIR}/IMBIE/Rignot/GRE_Basins_IMBIE2_v1.3.shp output=GRE
+v.import input=${DATADIR}/IMBIE/Rignot/ANT_Basins_IMBIE2_v1.6.shp output=ANT
+
+v.db.droprow input=GRE where='SUBREGION1 == "ICE_CAP"' output=GRE_nocaps
+g.rename vector=GRE_nocaps,GRE --o
+
+v.to.rast input=ANT output=ANT use=cat
+v.to.rast input=GRE output=GRE use=cat
+
+# ModelE land ice is a bit larger, so we grow these outward
+r.grow.distance input=GRE value=GRE_grow
+r.grow.distance input=ANT value=ANT_grow
+
+r.mapcalc "GRE_Rignot = if(landice@RGI == 5, GRE_grow, null())"
+r.mapcalc "ANT_Rignot = if(landice@RGI == 19, ANT_grow, null())"
+
+r.patch -s input=GRE_Rignot,ANT_Rignot output=landice
+
+# Ocean basins for each ROI
+r.grow.distance input=landice value=dist maximum_distance=2.5
+r.mapcalc "shoreface = if(focean, dist)" --o
+r.null map=shoreface setnull=0
+#+END_SRC
+
+** Display
+
+#+BEGIN_SRC bash :exports both :results verbatim
+d.mon wx0
+d.rast landice@RGI
+d.erase
+d.rast shoreface@RGI
+d.erase
+d.rast landice@Rignot
+d.erase
+d.rast shoreface@Rignot
+#+END_SRC
+
+** Export to NetCDF
+
+#+BEGIN_SRC jupyter-python :exports both
+import numpy as np
+import xarray as xr
+
+from grass_session import Session
+from grass.script import core as gcore
+import grass.script as gscript
+# import grass.script.setup as gsetup
+# import grass python libraries
+from grass.pygrass.modules.shortcuts import general as g
+from grass.pygrass.modules.shortcuts import raster as r
+from grass.pygrass.modules.shortcuts import vector as v
+from grass.pygrass.modules.shortcuts import temporal as t
+from grass.script import array as garray
+
+# define where to process the data in the temporary grass-session
+ds = xr.Dataset()
+
+with Session(gisdb=".", location="G_ModelE", mapset="PERMANENT", create_opts=None):
+    x = garray.array("x", null=np.nan)
+    y = garray.array("y", null=np.nan)
+    ds['lon'] = x[0,:]
+    ds['lat'] = y[:,0]
+
+    tmp = garray.array("landice@RGI", null=np.nan)
+    ds['landice_RGI'] = (('lat','lon'), tmp)
+    tmp = garray.array("shoreface@RGI", null=np.nan)
+    ds['shoreface_RGI'] = (('lat','lon'), tmp)
+
+    tmp = garray.array("landice@Rignot", null=np.nan)
+    ds['landice_Rignot'] = (('lat','lon'), tmp)
+    tmp = garray.array("shoreface@Rignot", null=np.nan)
+    ds['shoreface_Rignot'] = (('lat','lon'), tmp)
+
+    # Support drag-and-drop to QGIS
+    ds['crs'] = True
+    ds['crs'].attrs['spatial_ref'] = 'EPSG:4326'
+    ds['crs'].attrs['grid_mapping_name'] = 'latitude_longitude'
+    for var in ds.data_vars:
+        ds[var].attrs['grid_mapping'] = 'crs'
+
+ds.to_netcdf('LIME_4326.nc')    
+#+END_SRC
+
+#+RESULTS:
+
+
+
+** Display
+
+#+BEGIN_SRC jupyter-python :exports both :result file :file figs/landice_Rignot_4326.png
+ds = xr.open_dataset('LIME_4326.nc')
+_ = ds['landice_Rignot'].plot()
+#+END_SRC
+
+#+RESULTS:
+[[file:figs/landice_Rignot_4326.png]]
+
+* PISM domains
+
++ Set up PISM domains
++ Reproject ModelE do PISM domains
+
+** Greenland
+*** Set up
+
++ This would be easier if we used EPSG:3413 data, but the historic domain from =Greenland_5km_v1.1.nc= is not EPSG:3413
++ PISM projection is ~+proj=stere +lat_0=90 +lat_ts=71 +lon_0=-39 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs +type=crs~
++ More details available from =gdalinfo landcover.tif= after extracting that from the NetCDF file with =gdal_translate= (see below)
+
+
+#+BEGIN_SRC bash :exports both :results verbatim
+gdal_translate NETCDF:"Greenland_5km_v1.1.nc":landcover landcover.tif
+grass -c landcover.tif G_GL
+
+# make some sub-mapsets
+g.mapset -c PISM
+r.in.gdal input=NETCDF:"Greenland_5km_v1.1.nc":landcover output=mask
+
+r.mapcalc "x = x()"
+r.mapcalc "y = y()"
+
+# 1 is ice, 0 is land
+r.mapcalc "mask = if((mask >= 3), 1, if(mask >= 2, 0, null()))" --o
+#+END_SRC
+
+*** Import Rignot basins
+
+#+BEGIN_SRC bash :exports both :results verbatim
+g.mapset -c basins
+ogr2ogr -s_srs EPSG:4326 -t_srs "$(g.proj -wf)" -f GPKG rignot.gpkg ${DATADIR}/IMBIE/Rignot/GRE_Basins_IMBIE2_v1.3.shp
+v.in.ogr input=rignot.gpkg output=basins
+v.to.rast input=basins output=basins use=cat
+#+END_SRC
+
+*** Clean up basins
+
++ Visual debug
+  
+#+BEGIN_SRC bash :exports both :results verbatim
+d.mon wx0
+d.rast mask
+d.vect basins
+d.rast basins
+#+END_SRC
+
++ Remove islands from the mask.
++ If they're islands interior to ice shelves, call it ice 'ice shelf'.
+ 
+#+BEGIN_SRC bash :exports both :results verbatim
+r.mapcalc "islands = if((mask@PISM == 1) & (not(isnull(basins))), 1, null())"
+
+# now remove unattached islands
+r.clump input=islands output=clumps --o
+# d.rast clumps
+main_clump=$(r.stats -c -n clumps sort=desc | head -n1 | cut -d" " -f1)
+r.mask raster=clumps maskcats=${main_clump} --o
+
+r.mapcalc "basins_badclass = if(mask@PISM == 1, basins, null())"
+r.reclass.area input=basins_badclass output=basins_clean value=1000000 method=rmarea mode=lesser
+r.mask -r
+#+END_SRC
+
++ Provide a 1, 10, and 100 km buffer into the ocean to define 'ocean basins'
++ The ocean side of a coastline is called the 'shoreface'
+
+#+BEGIN_SRC bash :exports both :results verbatim
+r.grow.distance input=mask@PISM distance=dist
+r.mapcalc "shoreface_dist_1 = if((dist > 0) & (dist < 1000), 1, null())"
+r.mapcalc "shoreface_dist_10 = if((dist > 0) & (dist < 10000), 1, null())"
+r.mapcalc "shoreface_dist_100 = if((dist > 0) & (dist < 100000), 1, null())"
+
+
+r.grow.distance input=basins_clean value=basins_clean_grow
+r.mapcalc "shoreface_basins_1 = if((dist > 0) & (dist < 1000), basins_clean_grow, null())"
+r.mapcalc "shoreface_basins_10 = if((dist > 0) & (dist < 10000), basins_clean_grow, null())"
+r.mapcalc "shoreface_basins_100 = if((dist > 0) & (dist < 100000), basins_clean_grow, null())"
+#+END_SRC
+
+*** Display
+
+#+BEGIN_SRC bash :exports both :results verbatim
+d.mon wx0
+d.rast shoreface_basins_100
+#+END_SRC
+
+** Antarctica
+*** Set up
+
+#+BEGIN_SRC bash :exports both :results verbatim
+grass -c EPSG:3031 G_AQ
+
+r.in.gdal -o input=NETCDF:"Antarctica_5km_dev1.0.nc":mask output=mask
+g.region raster=mask -pas
+
+r.mapcalc "x = x()"
+r.mapcalc "y = y()"
+
+g.mapset -c PISM
+
+r.mapcalc "mask = int(mask@PERMANENT)" --overwrite
+
+r.null map=mask setnull=0
+
+g.mapset PERMANENT
+g.remove -f type=raster name=mask
+#+END_SRC
+
+*** Import Rignot basins
+
+#+BEGIN_SRC bash :exports both :results verbatim
+g.mapset -c basins
+v.import input=${DATADIR}/IMBIE/Rignot/ANT_Basins_IMBIE2_v1.6.shp output=basins
+v.to.rast input=basins output=basins use=cat
+#+END_SRC
+
+*** Clean up basins
+
++ Visual debug
+  
+#+BEGIN_SRC bash :exports both :results verbatim
+d.mon wx0
+d.rast mask
+d.vect basins
+d.rast basins
+#+END_SRC
+
++ Remove islands from basins
+
+#+BEGIN_SRC bash :exports both :results verbatim
+r.mapcalc "basins_noislands = if(basins == 1, null(), basins)"
+#+END_SRC
+
++ Remove islands from the mask.
++ If they're islands interior to ice shelves, call it ice 'ice shelf'.
+ 
+#+BEGIN_SRC bash :exports both :results verbatim
+r.reclass.area input=mask@PISM output=mask_noislands value=100000 mode=lesser method=reclass
+r.mapcalc "mask_noislands = if(mask_noislands, 2)" --o # all islands are ice shelves
+
+# now remove unattached islands
+r.patch input=mask_noislands,mask@PISM output=mask_islands
+r.mapcalc "mask_islands = if(mask_islands, 1, 0)" --o
+r.clump input=mask_islands output=clumps --o
+d.rast clumps
+main_clump=$(r.stats -c -n clumps sort=desc | head -n1 | cut -d" " -f1)
+r.mask raster=clumps maskcats=${main_clump} --o
+
+r.patch input=mask_noislands,mask@PISM output=mask
+# mask@PISM has main ice (1) and ice shelves (2).
+# There are no islands. All main ice is contiguous.
+#+END_SRC
+
++ Rignot basins don't cover ice shelves.
++ Give each ice shelf the value of the majority upstream basin
+
+#+BEGIN_SRC bash :exports both :results verbatim
+
+# grow basins over shelves (and ocean). Note that some shelves will be split. We want each shelf to have 1 upstream basin
+r.grow.distance input=basins_noislands value=basins_grow
+
+# Make vector of just ice shelves, and 
+r.mask raster=mask maskcats=2 --o
+r.to.vect input=mask output=shelves type=area # ice shelf only vector
+# Assign each shelf a value of whatever basin covers the most (median) of that shelf
+v.rast.stats map=shelves raster=basins_grow column=basin method=median
+r.mask -r
+v.to.rast input=shelves output=shelves use=attr attribute_column=basin_median # rasterize shelves with median value
+r.patch input=basins_noislands,shelves output=merged
+
+# fill in all the little nulls
+r.mask raster=mask --o
+r.grow.distance input=merged value=basins_clean
+r.mask -r
+#+END_SRC
+
++ Provide a 1, 10, and 100 km buffer into the ocean to define 'ocean basins'
++ The ocean side of a coastline is called the 'shoreface'
+
+#+BEGIN_SRC bash :exports both :results verbatim
+r.grow.distance input=mask distance=dist
+r.mapcalc "shoreface_dist_1 = if((dist > 0) & (dist < 1000), 1, null())"
+r.mapcalc "shoreface_dist_10 = if((dist > 0) & (dist < 10000), 1, null())"
+r.mapcalc "shoreface_dist_100 = if((dist > 0) & (dist < 100000), 1, null())"
+
+r.mapcalc "shoreface_basins_1 = if((dist > 0) & (dist < 1000), basins_clean, null())"
+r.mapcalc "shoreface_basins_10 = if((dist > 0) & (dist < 10000), basins_clean, null())"
+r.mapcalc "shoreface_basins_100 = if((dist > 0) & (dist < 100000), basins_clean, null())"
+#+END_SRC
+
+
+*** Display
+
+#+BEGIN_SRC bash :exports both :results verbatim
+d.mon wx0
+d.rast shoreface_basins_100
+#+END_SRC
+
+
+** Export to NetCDF
+
+#+BEGIN_SRC jupyter-python :exports both
+import numpy as np
+import xarray as xr
+
+from grass_session import Session
+from grass.script import core as gcore
+import grass.script as gscript
+# import grass.script.setup as gsetup
+# import grass python libraries
+from grass.pygrass.modules.shortcuts import general as g
+from grass.pygrass.modules.shortcuts import raster as r
+from grass.pygrass.modules.shortcuts import vector as v
+from grass.pygrass.modules.shortcuts import temporal as t
+from grass.script import array as garray
+
+for loc in ['GL','AQ']:
+    ds = xr.Dataset()
+    with Session(gisdb=".", location="G_"+loc, mapset="PERMANENT", create_opts=None):
+
+        x = garray.array("x", null=np.nan)
+        y = garray.array("y", null=np.nan)
+        ds['x'] = x[0,:]
+        ds['y'] = y[:,0]
+
+        tmp = garray.array("shoreface_basins_1@basins", null=np.nan)
+        ds['shoreface_basins_1'] = (('y','x'), tmp)
+        tmp = garray.array("shoreface_basins_10@basins", null=np.nan)
+        ds['shoreface_basins_10'] = (('y','x'), tmp)
+        tmp = garray.array("shoreface_basins_100@basins", null=np.nan)
+        ds['shoreface_basins_100'] = (('y','x'), tmp)
+
+
+        # Support drag-and-drop to QGIS
+        for var in ds.data_vars:
+            ds[var].attrs['grid_mapping'] = 'crs'
+        
+        ds['crs'] = True
+        if loc == 'GL':
+            ds['crs'].attrs['spatial_ref'] = '+proj=stere +lat_0=90 +lat_ts=71 +lon_0=-39 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs +type=crs'
+            ds['crs'].attrs['grid_mapping_name'] = 'polar_stereographic'
+        elif loc == 'AQ':
+            ds['crs'].attrs['spatial_ref'] = 'EPSG:3031'
+            ds['crs'].attrs['grid_mapping_name'] = 'polar_stereographic'
+           
+        ds.to_netcdf('LIME_'+loc+'.nc')    
+#+END_SRC
+
+#+RESULTS:
+
+** Display
+
+#+BEGIN_SRC jupyter-python :exports both :result file :file figs/shoreface_basins_100_AQ.png
+ds = xr.open_dataset('LIME_AQ.nc')
+_ = ds['shoreface_basins_100'].plot()
+#+END_SRC
+
+#+RESULTS:
+[[file:figs/shoreface_basins_100_AQ.png]]
+

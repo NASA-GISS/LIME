@@ -13,23 +13,24 @@
 - [[#introduction][Introduction]]
 - [[#summary][Summary]]
 - [[#implementation][Implementation]]
-  - [[#post-process-modele-outputs][Post-process ModelE outputs]]
-  - [[#reproject-from-modele-grid-to-pism-grid][Reproject from ModelE grid to PISM grid]]
-    - [[#open-all-oij-files-into-one-xarray-data-cube][Open all oij files into one xarray data cube]]
-    - [[#add-metadata-and-tidy-a-bit][Add metadata and tidy a bit]]
-      - [[#print][Print]]
-      - [[#plot][Plot]]
-    - [[#fix-metadata][Fix metadata]]
-      - [[#rgi-regions][RGI regions]]
-      - [[#rignot-regions][Rignot regions]]
-  - [[#select-appropriate-t--s-for-each-cell][Select appropriate T & S for each cell]]
-    - [[#800-m-depth][800 m depth]]
-    - [[#average-of-top-800-m-depth][Average of top 800 m depth]]
-    - [[#other][Other?]]
-  - [[#designate-unique-basin-ids-for-each-shelf-or-groups-of-shelves][Designate unique basin IDs for each shelf or groups of shelves]]
-  - [[#reformat-variables-and-netcdf-time-series-to-meet-pism-requirements][Reformat variables and NetCDF time series to meet PISM requirements]]
+  - [[#post-process-one-month-data-from-modele-to-more-generic-format][Post-process one month data from ModelE to more generic format]]
+  - [[#set-up-modele-domain][Set up ModelE domain]]
+  - [[#import][Import]]
+    - [[#meta][Meta]]
+    - [[#temperature--salinity][Temperature & salinity]]
+  - [[#reproject][Reproject]]
     - [[#greenland][Greenland]]
     - [[#antarctica][Antarctica]]
+  - [[#notdone-make-3d][NOTDONE Make 3D]]
+    - [[#greenland-1][Greenland]]
+    - [[#antarctica-1][Antarctica]]
+  - [[#export-to-netcdf][Export to NetCDF]]
+    - [[#display][Display]]
+    - [[#merge-modele-output-with-lime-metadata][Merge ModelE output with LIME metadata]]
+    - [[#select-appropriate-t--s-depth-for-each-cell][Select appropriate T & S depth for each cell]]
+    - [[#notdone-select-appropriate-t--s-for-each-basin][NOTDONE Select appropriate T & S for each basin]]
+    - [[#notdone-create-basin-ids][NOTDONE Create basin IDs]]
+    - [[#reformat-to-meet-pism-requirements][Reformat to meet PISM requirements]]
   - [[#test-run-in-pism][Test run in PISM]]
 
 * Introduction
@@ -50,494 +51,302 @@ This summary may be out of date. See TOC, section headings, and code within for 
 + Select relevant depth of ocean properties
   + GZ draft, bathymetric routing to shelf break, etc.
 
++ WARN :: Use nearest neighbor sampling otherwise interpolation would occur, which might be OK for T or S, but unlikely to produce reasonable density which is ~f(T,S)~.
+    
 * Implementation
 
-** Post-process ModelE outputs
+** Post-process one month data from ModelE to more generic format
 
 #+BEGIN_SRC bash :exports both :results verbatim
 RUNNAME=E1oM20_r01
+MONTH=FEB
+YEAR=2001
 
-month=($(locale mon|tr '[:lower:]' '[:upper:]'| tr ';' '\n' |cut -c1-3))
-year=($(ls ${CMRUNDIR}/${RUNNAME}/JAN????.acc${RUNNAME}.nc| rev | cut -d'/' -f1 | rev | cut -c4-7))
+month_names=($(locale mon|tr '[:lower:]' '[:upper:]'| tr ';' '\n' |cut -c1-3))
+month_num=$(echo ${month_names[@]} |tr ' ' '\n' | cat -n|grep ${MONTH} |tr -cd '[:digit:]')
+printf -v month_num "%02d" $month_num # 0 padding
 
-parallel "scaleacc ${CMRUNDIR}/${RUNNAME}/{1}{2}.acc${RUNNAME}.nc oijl" ::: ${month[@]} ::: ${year[@]}
+scaleacc ${CMRUNDIR}/${RUNNAME}/${MONTH}${YEAR}.acc${RUNNAME}.nc oijl
+mv ${MONTH}${YEAR}.oijl${RUNNAME}.nc oijl.nc
 
-# # alternate
-# for m in ${month[@]}; do
-#   for y in ${year[@]}; do
-#     scaleacc ${CMRUNDIR}/${RUNNAME}/${m}${y}.acc${RUNNAME}.nc oijl
-#   done
-# done
-
-# need oceanfr, landfr, landicefr which are all in aij file
-# aj,ajl,aijl,aijk,ijhc
-scaleacc ${CMRUNDIR}/${RUNNAME}/${month[0]}${year[0]}.acc${RUNNAME}.nc aij 
-mv ${month[0]}${year[0]}.aij${RUNNAME}.nc aij.nc
+scaleacc ${CMRUNDIR}/${RUNNAME}/${MONTH}${YEAR}.acc${RUNNAME}.nc aij
+mv ${MONTH}${YEAR}.aij${RUNNAME}.nc aij.nc
 #+END_SRC
 
-** Reproject from ModelE grid to PISM grid
+** Set up ModelE domain
 
-+ WARN :: Use nearest neighbor sampling otherwise interpolation would occur, which might be OK for T or S, but unlikely to produce reasonable density which is ~f(T,S)~.
++ Note, 4x5 arrays have a smaller polar cell.
++ Easiest to set two domains
+  + 4x5 +- 92 °
+  + 2x2.5 +- 90 °
 
-+ ModelE grid is EPSG:3413
-+ PISM AQ: EPSG:3031
-+ PISM GL: EPSG:3413
+Resample to the +- 90 ° domain.
 
-*** Open all oij files into one xarray data cube
+#+BEGIN_SRC bash :exports both :results verbatim
+grass ./G_ModelE/PERMANENT
+# g.region -ps n=90 s=-90 w=-180 e=180 nsres=1 ewres=1
 
-#+BEGIN_SRC jupyter-python :exports both
-import rioxarray
-import xarray as xr
-import glob
-import calendar
+g.mapset -c 4x5
 
-mon2num = {month.upper(): index for index, month in enumerate(calendar.month_abbr) if month}
+# hack for ModelE polar cells
+g.region -p n=92 s=-92 w=-180 e=180 nsres=4 ewres=5
+g.region save=4x5_92
 
-i = 0
-def add_dims(xda):
-    global i
-    i=i+1
-    f = xda.encoding['source']
-    m = f.split('/')[-1][0:3] # year
-    y = f.split('/')[-1][3:7] # year
-    dt = pd.Timestamp(year=int(y), month=mon2num[m], day=1)
-    if i < 10: print(f'{i}/{len(ncfiles)},{y},{m},{dt},{f}') if i < 10 else print("etc...")
-    if i == 10: print("etc...")
-    xda = xda.expand_dims(time = [dt])
-    return xda
-
-ncfiles = glob.glob("*oijl*.nc")
-ds_raw = xr.open_mfdataset(ncfiles,
-                           preprocess = add_dims,
-                           combine = 'by_coords',
-                           parallel = True)
+g.mapset -c 2x2p5
+g.region -p n=90 s=-90 nsres=2 ewres=2.5
+g.region save=2x2p5_90
 #+END_SRC
 
-#+RESULTS:
-: 1/132,2009,SEP,2009-09-01 00:00:00,/home/kdm/projects/GISS/docs/SEP2009.oijlE1oM20_r01.nc
-: 2/132,2002,JUL,2002-07-01 00:00:00,/home/kdm/projects/GISS/docs/JUL2002.oijlE1oM20_r01.nc
-: 3/132,2001,APR,2001-04-01 00:00:00,/home/kdm/projects/GISS/docs/APR2001.oijlE1oM20_r01.nc
-: 4/132,2003,FEB,2003-02-01 00:00:00,/home/kdm/projects/GISS/docs/FEB2003.oijlE1oM20_r01.nc
-: 5/132,2009,FEB,2009-02-01 00:00:00,/home/kdm/projects/GISS/docs/FEB2009.oijlE1oM20_r01.nc
-: 6/132,2000,FEB,2000-02-01 00:00:00,/home/kdm/projects/GISS/docs/FEB2000.oijlE1oM20_r01.nc
-: 7/132,2003,JUL,2003-07-01 00:00:00,/home/kdm/projects/GISS/docs/JUL2003.oijlE1oM20_r01.nc
-: 8/132,2008,JUN,2008-06-01 00:00:00,/home/kdm/projects/GISS/docs/JUN2008.oijlE1oM20_r01.nc
-: 9/132,2004,MAR,2004-03-01 00:00:00,/home/kdm/projects/GISS/docs/MAR2004.oijlE1oM20_r01.nc
-: etc...
+** Import 
+*** Meta
+#+BEGIN_SRC bash :exports both :results verbatim
+g.mapset 4x5
+r.in.gdal -o input=NetCDF:aij.nc:landicefr output=landicefr
+r.in.gdal -o input=NetCDF:aij.nc:landfr output=landfr
+r.in.gdal -o input=NetCDF:aij.nc:ocnfr output=ocnfr
 
-#+BEGIN_SRC jupyter-python :exports both
-print(ds_raw)
+g.mapset 2x2p5
+r.resample input=landicefr@4x5 output=landicefr
+r.resample input=landfr@4x5 output=landfr
+r.resample input=ocnfr@4x5 output=ocnfr
 #+END_SRC
 
-#+RESULTS:
-#+begin_example
-<xarray.Dataset>
-Dimensions:       (time: 132, lono: 72, lono2: 72, lato: 46, lato2: 46,
-                   zoc: 13, zoce: 13)
-Coordinates:
-  ,* time          (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
-  ,* lono          (lono) float32 -177.5 -172.5 -167.5 ... 167.5 172.5 177.5
-  ,* lono2         (lono2) float32 -175.0 -170.0 -165.0 ... 170.0 175.0 180.0
-  ,* lato          (lato) float32 -90.0 -86.0 -82.0 -78.0 ... 78.0 82.0 86.0 90.0
-  ,* lato2         (lato2) float32 -90.0 -88.0 -84.0 -80.0 ... 80.0 84.0 88.0
-  ,* zoc           (zoc) float32 6.0 21.0 43.5 ... 1.706e+03 2.571e+03 3.868e+03
-  ,* zoce          (zoce) float32 12.0 30.0 57.0 ... 2.052e+03 3.09e+03 4.647e+03
-Data variables: (12/34)
-    oxyp          (time, lato, lono) float32 dask.array<chunksize=(1, 46, 72), meta=np.ndarray>
-    mo            (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    mou           (time, zoc, lato, lono2) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    mov           (time, zoc, lato2, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    oxyp3         (time, zoce, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    heat          (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    ...            ...
-    sgmflx_z      (time, zoce, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    pot_temp      (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    pot_dens      (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    pot_dens2000  (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    dens          (time, zoc, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    mfw2          (time, zoce, lato, lono) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-Attributes:
-    xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
-    fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
-#+end_example
+*** Temperature & salinity
 
-*** Add metadata and tidy a bit
+#+BEGIN_SRC bash :exports both :results verbatim
+nlevel=$(ncks -M -C -v zoc oijl.nc |grep "zoc = "|tr -cd '[:digit:]')
+levels=($(seq -w ${nlevel}))
 
-#+BEGIN_SRC jupyter-python :exports both
-ds = ds_raw.rio.write_crs("epsg:4326")
+for lev in ${levels[@]}; do
+  g.mapset 4x5
+  r.in.gdal -o input=NetCDF:oijl.nc:salt output=salt_${lev} band=${lev}
+  r.in.gdal -o input=NetCDF:oijl.nc:pot_temp output=temp_${lev} band=${lev}
 
-ds = ds.rename({'lono':'x', 'lato':'y', 'zoc':'z'}) # or rio.set_spatial_dims()
-ds = ds[['pot_temp','salt']]
-
-
-# add some AIJ metadata
-meta_aij = xr.open_dataset('aij.nc')
-ds['oceanfr'] = (('y','x'), meta_aij['ocnfr'].data)
-ds['landicefr'] = (('y','x'), meta_aij['landicefr'].data)
-ds['landfr'] = (('y','x'), meta_aij['landfr'].data)
-
-
-# add some land ice regional metadata
-meta_roi = xr.open_dataset('~/projects/GISS/notes/lime_roi.nc')
-
-# match dimensions
-meta_roi = meta_roi.rename({'lon':'x','lat':'y'}).interp_like(ds, method="nearest")
-for vstr in ['landice_RGI','shoreface_RGI','landice_Rignot','shoreface_Rignot']:
-    v = meta_roi[vstr]
-    ds[vstr] = (('y','x'), v.data)
+  g.mapset 2x2p5
+  r.resample input=salt_${lev}@4x5 output=salt_${lev}
+  r.resample input=temp_${lev}@4x5 output=temp_${lev}
+done
 #+END_SRC
 
-#+RESULTS:
-
-**** Print 
-
-#+BEGIN_SRC jupyter-python :exports both
-print(ds)
-#+END_SRC
-
-#+RESULTS:
-#+begin_example
-<xarray.Dataset>
-Dimensions:           (time: 132, z: 13, y: 46, x: 72)
-Coordinates:
-  ,* time              (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
-  ,* x                 (x) float32 -177.5 -172.5 -167.5 ... 167.5 172.5 177.5
-  ,* y                 (y) float32 -90.0 -86.0 -82.0 -78.0 ... 82.0 86.0 90.0
-  ,* z                 (z) float32 6.0 21.0 43.5 ... 2.571e+03 3.868e+03
-    spatial_ref       int64 0
-Data variables:
-    pot_temp          (time, z, y, x) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    salt              (time, z, y, x) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    oceanfr           (y, x) float32 0.0 0.0 0.0 0.0 ... 100.0 100.0 100.0 100.0
-    landicefr         (y, x) float32 100.0 100.0 100.0 100.0 ... 0.0 0.0 0.0 0.0
-    landfr            (y, x) float32 100.0 100.0 100.0 100.0 ... 0.0 0.0 0.0 0.0
-    landice_RGI       (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-    shoreface_RGI     (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-    landice_Rignot    (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-    shoreface_Rignot  (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-Attributes:
-    xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
-    fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
-#+end_example
-
-**** Plot
-
-***** Data
-#+BEGIN_SRC jupyter-python :exports both
-_ = ds['salt']\
-    .isel({'time':[0,6]})\
-    .isel({'z':0})\
-    .plot(col="time", robust=True)
-#+END_SRC
-
-#+RESULTS:
-[[file:./figs_tmp/127d3865bd4486de15405c0a695c1a08a6ec67e7.png]]
-
-***** Metadata
-
-+ Some shoreface gaps at 4x5 resolution because the shoreface data produced at 2x2.5 (see [[./ROIs.org]])
-
-#+BEGIN_SRC jupyter-python :exports both
-import matplotlib.pyplot as plt
-
-vars = ['landice_RGI','shoreface_RGI','landice_Rignot','shoreface_Rignot']
-fig, axs = plt.subplots(2,2)
-axs = axs.flatten()
-for i,v in enumerate(vars):
-    ds[v].plot(ax=axs[i])
-    axs[i].set_title("")
-    axs[i].set_ylim([-90,90])
-    if i != 0:
-        axs[i].set_yticklabels([])
-        axs[i].axes.get_yaxis().set_visible(False)
-#+END_SRC
-
-#+RESULTS:
-[[file:./figs_tmp/9675838c30f9431d6ecd9fe08a5c823841b5f03d.png]]
-
-
-
-*** Fix metadata
-
-+ Shoreface computed at 2x2.5 degrees, but has gaps at 4x5 degrees. Re-do
-
-**** RGI regions
-
-#+BEGIN_SRC jupyter-python :exports both
-import numpy as np
-
-print(ds)
-rgi = ds['landice_RGI'].data
-
-rgi_D = np.roll(rgi, 1, axis=0)
-rgi_U = np.roll(rgi, -1, axis=0)
-rgi_R = np.roll(rgi, 1, axis=1)
-rgi_L = np.roll(rgi, -1, axis=1)
-
-stack = np.dstack((rgi_D,rgi_U,rgi_R,rgi_L))
-shore = np.nanmedian(stack, axis=2)
-ds['shoreface_RGI'] = (('y','x'), shore)
-ds['shoreface_RGI'] = ds['shoreface_RGI']\
-    .where(ds['landice_RGI'].isnull())\
-    .where((ds['shoreface_RGI'] == 19) | (ds['shoreface_RGI'] == 5))\
-    .where(ds['y'] > -88)
-_ = ds['shoreface_RGI'].plot()
-#+END_SRC
-
-#+RESULTS:
-:RESULTS:
-#+begin_example
-<xarray.Dataset>
-Dimensions:           (time: 132, z: 13, y: 46, x: 72)
-Coordinates:
-  ,* time              (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
-  ,* x                 (x) float32 -177.5 -172.5 -167.5 ... 167.5 172.5 177.5
-  ,* y                 (y) float32 -90.0 -86.0 -82.0 -78.0 ... 82.0 86.0 90.0
-  ,* z                 (z) float32 6.0 21.0 43.5 ... 2.571e+03 3.868e+03
-    spatial_ref       int64 0
-Data variables:
-    pot_temp          (time, z, y, x) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    salt              (time, z, y, x) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    oceanfr           (y, x) float32 0.0 0.0 0.0 0.0 ... 100.0 100.0 100.0 100.0
-    landicefr         (y, x) float32 100.0 100.0 100.0 100.0 ... 0.0 0.0 0.0 0.0
-    landfr            (y, x) float32 100.0 100.0 100.0 100.0 ... 0.0 0.0 0.0 0.0
-    landice_RGI       (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-    shoreface_RGI     (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-    landice_Rignot    (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-    shoreface_Rignot  (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-Attributes:
-    xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
-    fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
-/home/kdm/local/mambaforge/envs/ds/lib/python3.10/site-packages/numpy/lib/nanfunctions.py:1217: RuntimeWarning: All-NaN slice encountered
-  return function_base._ureduce(a, func=_nanmedian, keepdims=keepdims,
-#+end_example
-[[file:./figs_tmp/c8f3c887ed4da9d17b9d9fae2541e4fd3649583d.png]]
-:END:
-
-
-**** Rignot regions
-
-#+BEGIN_SRC jupyter-python :exports both
-import numpy as np
-
-print(ds)
-rignot = ds['landice_Rignot'].data
-
-rignot_D = np.roll(rignot, 1, axis=0)
-rignot_U = np.roll(rignot, -1, axis=0)
-rignot_R = np.roll(rignot, 1, axis=1)
-rignot_L = np.roll(rignot, -1, axis=1)
-
-stack = np.dstack((rignot_D,rignot_U,rignot_R,rignot_L))
-shore = np.nanmedian(stack, axis=2)
-ds['shoreface_Rignot'] = (('y','x'), shore)
-ds['shoreface_Rignot'] = ds['shoreface_Rignot'].where(ds['shoreface_RGI'] > 0)
-_ = ds['shoreface_Rignot'].plot()
-#+END_SRC
-
-#+RESULTS:
-:RESULTS:
-#+begin_example
-<xarray.Dataset>
-Dimensions:           (time: 132, z: 13, y: 46, x: 72)
-Coordinates:
-  ,* time              (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
-  ,* x                 (x) float32 -177.5 -172.5 -167.5 ... 167.5 172.5 177.5
-  ,* y                 (y) float32 -90.0 -86.0 -82.0 -78.0 ... 82.0 86.0 90.0
-  ,* z                 (z) float32 6.0 21.0 43.5 ... 2.571e+03 3.868e+03
-    spatial_ref       int64 0
-Data variables:
-    pot_temp          (time, z, y, x) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    salt              (time, z, y, x) float32 dask.array<chunksize=(1, 13, 46, 72), meta=np.ndarray>
-    oceanfr           (y, x) float32 0.0 0.0 0.0 0.0 ... 100.0 100.0 100.0 100.0
-    landicefr         (y, x) float32 100.0 100.0 100.0 100.0 ... 0.0 0.0 0.0 0.0
-    landfr            (y, x) float32 100.0 100.0 100.0 100.0 ... 0.0 0.0 0.0 0.0
-    landice_RGI       (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-    shoreface_RGI     (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-    landice_Rignot    (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-    shoreface_Rignot  (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-Attributes:
-    xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
-    fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
-#+end_example
-[[file:./figs_tmp/f4f2c12abb4b4d4a59b7c9570c66dca5e874b8fd.png]]
-:END:
-
-
-
-
-** Select appropriate T & S for each cell
-
-#+BEGIN_SRC jupyter-python :exports both
-print("Depth layers: ", ds['z'].values)
-#+END_SRC
-
-#+RESULTS:
-: Depth layers:  [   6.      21.      43.5     77.25   127.875  203.812  317.719  488.578
-:   744.867 1129.3   1705.95  2570.93  3868.39 ]
-
-*** 800 m depth
-
-#+BEGIN_SRC jupyter-python :exports both
-ds_744 = ds[['pot_temp','salt']]\
-    .where(ds['shoreface_Rignot'] > 0)\
-    .sel(z=800, method='nearest')
-
-_ = ds_744['salt'].isel(time=0).plot()
-#+END_SRC
-
-#+RESULTS:
-[[file:./figs_tmp/33bf2b448b62c2b98143297a1d47a2cd058c181b.png]]
-
-*** Average of top 800 m depth
-
-#+BEGIN_SRC jupyter-python :exports both
-ds_250_800 = ds[['pot_temp','salt']]\
-    .sel(z=slice(250,800))\
-    .where(ds['shoreface_Rignot'] > 0)
-
-print("Averaging over depths: ", ds_250_800['z'].values)
-
-ds_250_800 = ds_250_800.mean(dim='z')
-
-_ = ds_250_800['salt'].isel(time=0).plot()
-#+END_SRC
-
-#+RESULTS:
-:RESULTS:
-: Averaging over depths:  [317.719 488.578 744.867]
-[[file:./figs_tmp/af93f6977ef08a8a826991fa60c5bd4718a2b26a.png]]
-:END:
-
-*** Other?
-
-+ Depth of nearby continental shelf edge?
-+ Basin fill from GZ to shelf edge?
-
-** Designate unique basin IDs for each shelf or groups of shelves
-
-+ See =shoreface_Rignot= in =lime_roi.nc=
-+ May need to start from 1 depending on what PISM needs?
-
-** Reformat variables and NetCDF time series to meet PISM requirements
-
-+ Let's use the *800 m depth* properties for this example.
-
-#+BEGIN_SRC jupyter-python :exports both
-P = ds[['pot_temp','salt','shoreface_Rignot']]\
-    .sel(z=800, method='nearest')
-    # .where(ds['shoreface_Rignot'] > 0)\
-
-P = P.rename({'pot_temp':'theta_ocean',
-              'salt':'salinity_ocean',
-              'shoreface_Rignot':'basins'})
-
-P['salinity_ocean'].attrs['units'] = 'g/kg'
-P['theta_ocean'].attrs['units'] = 'Celsius'
-
-# Assume times are the start of period
-
-P['salinity_ocean'].attrs['bounds'] = 'time_bounds'
-P['theta_ocean'].attrs['bounds'] = 'time_bounds'
-
-bounds = np.stack((P['time'].values,P['time'].values))
-bounds[1,:-1] = bounds[1,1:]
-bounds[1,-1] = bounds[1,-1] + np.max(bounds[1,:]-bounds[0,:])
-
-Pt = P['time'].expand_dims(tb = 2).rename("time_bnds")
-Pt['time_bounds'] = (('time','tb'), bounds.T)
-#+END_SRC
-
-#+RESULTS:
-
+** Reproject
 *** Greenland
 
-#+BEGIN_SRC jupyter-python :exports both
-P_GL = P.where(((P['y'] > 60) &
-                (P['y'] < 88) &
-                (P['x'] < 10) &
-                (P['x'] > -90)), drop=True)\
-        .rio\
-        .write_crs('EPSG:4326')\
-        .rio\
-        .reproject(dst_crs = 'EPSG:3413',
-                   resolution = (25000, 25000),
-                   nodata = np.nan)
+The =r.grow.distance= flood-fills the values with nearest neighbor. This is because ModelE coast may not match PISM coast, but we will want to be able to access the T and S values nearest the coast.
 
-P_GL = xr.merge([P_GL, Pt])
+#+BEGIN_SRC bash :exports both :results verbatim
+grass ./G_GL/PERMANENT
 
-print(P_GL)
-P_GL['salinity_ocean'].isel({'time':0}).plot()
+nlevel=$(ncks -M -C -v zoc oijl.nc |grep "zoc = "|tr -cd '[:digit:]')
+levels=($(seq -w ${nlevel}))
 
-P_GL.to_netcdf('ocean_PISM_GL.nc')
+r.proj location=G_ModelE mapset=2x2p5 input=landicefr method=nearest 
+r.proj location=G_ModelE mapset=2x2p5 input=landfr method=nearest
+r.proj location=G_ModelE mapset=2x2p5 input=ocnfr method=nearest
+
+# rasters=$(r.proj location=G_ModelE mapset=2x2p5  -l |grep -E '^temp_|^salt_')
+# parallel --progress --bar "r.proj --q location=G_ModelE mapset=2x2p5 input={1} method=nearest" ::: ${rasters}
+for var in salt temp; do
+  for lev in ${levels[@]}; do
+    r.proj location=G_ModelE mapset=2x2p5 input=${var}_${lev} output=${var}_${lev}_E method=nearest
+    r.grow.distance input=${var}_${lev}_E value=${var}_${lev}
+  done
+done
+exit
 #+END_SRC
 
-#+RESULTS:
-:RESULTS:
-#+begin_example
-<xarray.Dataset>
-Dimensions:         (x: 204, y: 128, time: 132, tb: 2)
-Coordinates:
-  ,* x               (x) float64 -2.337e+06 -2.312e+06 ... 2.713e+06 2.738e+06
-  ,* y               (y) float64 -1.368e+05 -1.618e+05 ... -3.287e+06 -3.312e+06
-  ,* time            (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
-    z               float32 744.9
-    spatial_ref     int64 0
-    time_bounds     (time, tb) datetime64[ns] 2000-01-01 ... 2011-01-01
-Dimensions without coordinates: tb
-Data variables:
-    theta_ocean     (time, y, x) float32 nan nan nan nan nan ... nan nan nan nan
-    salinity_ocean  (time, y, x) float32 nan nan nan nan nan ... nan nan nan nan
-    basins          (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-    time_bnds       (tb, time) datetime64[ns] 2000-01-01 ... 2010-12-01
-Attributes:
-    xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
-    fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
-#+end_example
-[[file:./figs_tmp/dd06943ffa6d257af3b6fce97892f9c21dfdca77.png]]
-:END:
+*** Antarctica
+#+BEGIN_SRC bash :exports both :results verbatim
+grass ./G_AQ/PERMANENT
+
+nlevel=$(ncks -M -C -v zoc oijl.nc |grep "zoc = "|tr -cd '[:digit:]')
+levels=($(seq -w ${nlevel}))
+
+r.proj -n location=G_ModelE mapset=2x2p5 input=landicefr method=nearest 
+r.proj -n location=G_ModelE mapset=2x2p5 input=landfr method=nearest
+r.proj -n location=G_ModelE mapset=2x2p5 input=ocnfr method=nearest
+
+for var in salt temp; do
+  for lev in ${levels[@]}; do
+    r.proj -n location=G_ModelE mapset=2x2p5 input=${var}_${lev} output=${var}_${lev}_E method=nearest
+    r.grow.distance input=${var}_${lev}_E value=${var}_${lev}
+  done
+done
+exit
+#+END_SRC
+
+** NOTDONE Make 3D
+*** Greenland
+
+#+BEGIN_SRC bash :exports both :results verbatim
+g.region t=13 -p3
+
+rasters=$(g.list type=raster pattern=salt_* sep=,)
+r.to.rast3 input=${rasters} output=salt 
+# r3.out.netcdf -p input=salt output=salt_AQ.nc
+
+rasters=$(g.list type=raster pattern=temp_* sep=,)
+r.to.rast3 input=${rasters} output=temp
+# r3.out.netcdf -p input=temp output=temp_AQ.nc
+
+#+END_SRC
 
 *** Antarctica
 
-#+BEGIN_SRC jupyter-python :exports both
-P_AQ = P.where(P['y'] < -60, drop=True)\
-        .where(P['basins'] > 0)\
-        .rio.write_crs('EPSG:4326')\
-        .rio.reproject(dst_crs = 'EPSG:3013',
-                       resolution = (25000, 25000),
-                       nodata = np.nan)
+#+BEGIN_SRC bash :exports both :results verbatim
+g.region t=13 -p3
 
-P_AQ['salinity_ocean'].isel({'time':0}).plot()
-print(P_AQ)
-P_AQ.to_netcdf('ocean_PISM_AQ.nc')
+rasters=$(g.list type=raster pattern=salt_* sep=,)
+r.to.rast3 input=${rasters} output=salt 
+# r3.out.netcdf -p input=salt output=salt_AQ.nc
+
+rasters=$(g.list type=raster pattern=temp_* sep=,)
+r.to.rast3 input=${rasters} output=temp
+# r3.out.netcdf -p input=temp output=temp_AQ.nc
+
+#+END_SRC
+
+
+** Export to NetCDF
+
+#+BEGIN_SRC jupyter-python :exports both
+import numpy as np
+import xarray as xr
+
+from grass_session import Session
+from grass.script import core as gcore
+import grass.script as gscript
+# import grass.script.setup as gsetup
+# import grass python libraries
+from grass.pygrass.modules.shortcuts import general as g
+from grass.pygrass.modules.shortcuts import raster as r
+from grass.pygrass.modules.shortcuts import vector as v
+from grass.pygrass.modules.shortcuts import temporal as t
+from grass.script import array as garray
+
+levels = xr.open_dataset('oijl.nc')['zoc'].values
+
+for loc in ['GL','AQ']:
+    ds = xr.Dataset()
+    with Session(gisdb=".", location="G_"+loc, mapset="PERMANENT", create_opts=None):
+
+        x = garray.array("x", null=np.nan)
+        y = garray.array("y", null=np.nan)
+        ds['z'] = levels
+        ds['x'] = x[0,:]
+        ds['y'] = y[:,0][::-1]
+
+        for var in ['temp','salt']:
+            for i,lev in enumerate(levels):
+                ii = str(i+1).zfill(2)
+                tmp = garray.array(f"{var}_{ii}", null=np.nan)
+                ds[f"{var}_{ii}"] = (('y','x'),tmp)
+
+        lnum = [str(n+1).zfill(2) for n in range(levels.size)]
+        temp3d = xr.concat([ds[f"temp_{n}"] for n in lnum], dim='z')
+        salt3d = xr.concat([ds[f"salt_{n}"] for n in lnum], dim='z')
+        ds['temp'] = (('z','y','x'), temp3d.data)
+        ds['salt'] = (('z','y','x'), salt3d.data)
+        for n in lnum:
+            ds = ds.drop([f"temp_{n}",f"salt_{n}"])
+
+        ds.to_netcdf(f"E2P_{loc}.nc")
 #+END_SRC
 
 #+RESULTS:
-:RESULTS:
-#+begin_example
-<xarray.Dataset>
-Dimensions:         (x: 279, y: 268, time: 132)
-Coordinates:
-  ,* x               (x) float64 -3.346e+06 -3.321e+06 ... 3.579e+06 3.604e+06
-  ,* y               (y) float64 -6.669e+06 -6.694e+06 ... -1.332e+07 -1.334e+07
-  ,* time            (time) datetime64[ns] 2000-01-01 2000-02-01 ... 2010-12-01
-    z               float32 744.9
-    spatial_ref     int64 0
-Data variables:
-    theta_ocean     (time, y, x) float32 nan nan nan nan nan ... nan nan nan nan
-    salinity_ocean  (time, y, x) float32 nan nan nan nan nan ... nan nan nan nan
-    basins          (y, x) float32 nan nan nan nan nan ... nan nan nan nan nan
-Attributes:
-    xlabel:   E1oM20_r01 (1880 atm.,the current modelE version)
-    fromto:   From:  2000  JAN  1,  Hr  0      To:  2000  FEB  1, Hr  0  Mode...
-#+end_example
-[[file:./figs_tmp/501d670d40045d840900d19a803e61f3b4fa12f4.png]]
-:END:
 
+*** Display
+
+#+BEGIN_SRC jupyter-python :exports both :results file :file figs/E2P_AQ_salt.png
+ds = xr.open_dataset("E2P_AQ.nc")
+_ = ds['salt'].plot(col='z', col_wrap=4, robust=True)
+#+END_SRC
+
+#+RESULTS:
+[[file:figs/E2P_AQ_salt.png]]
+
+
+*** Merge ModelE output with LIME metadata
+
+#+BEGIN_SRC jupyter-python :exports both
+import numpy as np
+import xarray as xr
+
+aq_meta = xr.open_dataset("LIME_AQ.nc")
+aq_me = xr.open_dataset("E2P_AQ.nc")
+aq = xr.merge([aq_meta,aq_me])
+
+gl_meta = xr.open_dataset("LIME_GL.nc")
+gl_me = xr.open_dataset("E2P_GL.nc")
+gl = xr.merge([gl_meta,gl_me])
+#+END_SRC
+
+#+RESULTS:
+
+*** Select appropriate T & S depth for each cell
+
+#+BEGIN_SRC jupyter-python :exports both
+
+# # 800 m
+# aq = aq.sel(z=800, method="nearest")
+# gl = gl.sel(z=800, method="nearest")
+
+# average of top 800 m
+aq = aq.sel({'z':slice(0,800)}).mean(dim='z')
+gl = gl.sel({'z':slice(0,800)}).mean(dim='z')
+#+END_SRC
+
+#+RESULTS:
+
+*** NOTDONE Select appropriate T & S for each basin
+
+#+BEGIN_SRC jupyter-python :exports both
+# aq.groupby('shoreface_basins_100').mean()['salt'].values
+#+END_SRC
+
+#+RESULTS:
+
+*** NOTDONE Create basin IDs
+
+*** Reformat to meet PISM requirements
+
+#+BEGIN_SRC jupyter-python :exports both
+aq = aq.rename({'temp':'theta_ocean',
+                'salt':'salinity_ocean'})
+aq['theta_ocean'].attrs['units'] = 'Celsius'
+aq['salinity_ocean'].attrs['units'] = 'g/kg'
+
+basins = aq['shoreface_basins_100'].values
+for i,b in enumerate(np.unique(basins)):
+    if np.isnan(b): basins[np.isnan(basins)] = 0
+    basins[basins == b] = i
+aq['basins'] = (('y','x'), basins)    
+
+# aq['basins'] = ((b-b.min())/(b.max()-b.min()) * (np.unique(b.values).size - 1))
+
+aq.to_netcdf('ocean_PICO_AQ.nc')
+
+gl = gl.rename({'temp':'theta_ocean',
+                'salt':'salinity_ocean'})
+gl['theta_ocean'].attrs['units'] = 'Celsius'
+gl['salinity_ocean'].attrs['units'] = 'g/kg'
+
+basins = gl['shoreface_basins_100'].values
+for i,b in enumerate(np.unique(basins)):
+    if np.isnan(b): basins[np.isnan(basins)] = 0
+    basins[basins == b] = i
+gl['basins'] = (('y','x'), basins)
+
+gl.to_netcdf('ocean_PICO_GL.nc')
+
+#+END_SRC
 
 ** Test run in PISM
 
 #+BEGIN_SRC bash :exports both :results verbatim
+
+cd ${LIME_ROOT}/runs/ocean.PICO
+cp ${LIME_ROOT}/../docs/ocean_PICO_* .
+
 mpiexec -n 4 \
 	pismr \
 	-i ../pism_Greenland_5km_v1.1.nc \
@@ -571,19 +380,3 @@ mpiexec -n 4 \
 	-o g20km_1ka_ocean_PICO.nc 
 #+END_SRC
 
-#+RESULTS:
-#+begin_example
---------------------------------------------------------------------------
-mpiexec was unable to find the specified executable file, and therefore
-did not launch the job.  This error was first reported for process
-rank 0; it may have occurred for other processes as well.
-
-NOTE: A common cause for this error is misspelling a mpiexec command
-      line parameter option (remember that mpiexec interprets the first
-      unrecognized command line token as the executable).
-
-Node:       t480
-Executable: pismr
---------------------------------------------------------------------------
-4 total processes failed to start
-#+end_example
