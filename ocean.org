@@ -12,7 +12,14 @@
 * Table of contents                               :toc_4:noexport:
 - [[#introduction][Introduction]]
 - [[#summary][Summary]]
-- [[#implementation][Implementation]]
+- [[#modele-ocean-runs][ModelE ocean runs]]
+  - [[#build-rundeck-and-compile][Build rundeck and compile]]
+    - [[#e1om20][E1oM20]]
+  - [[#first-run][First run]]
+    - [[#run-1-hour][Run 1 hour]]
+    - [[#run-longer-until-yearmonthdatehoure-defined-in-i][Run longer until {YEAR,MONTH,DATE,HOUR}E defined in I]]
+  - [[#postprocess][Postprocess]]
+- [[#modele-to-pism][ModelE to PISM]]
   - [[#post-process-one-month-data-from-modele-to-more-generic-format][Post-process one month data from ModelE to more generic format]]
   - [[#set-up-modele-domain][Set up ModelE domain]]
   - [[#import][Import]]
@@ -49,8 +56,76 @@ This summary may be out of date. See TOC, section headings, and code within for 
   + GZ draft, bathymetric routing to shelf break, etc.
 
 + WARN :: Use nearest neighbor sampling otherwise interpolation would occur, which might be OK for T or S, but unlikely to produce reasonable density which is ~f(T,S)~.
-    
-* Implementation
+
+* ModelE ocean runs
+
+| Template | Comment                      |
+|----------+------------------------------|
+| E4M20    | 4x5 resolution qflux ocean   |
+| E1oM20   | 4x5 dynamic ocean            |
+| E6F40    | 2x2.5 resolution qflux ocean |
+| E1F40o13 | 2x2.5 dynamic 13 layer ocean |
+| E1F40o32 | 2x2.5 dynamic 32 layer ocean |
+
+** Build rundeck and compile
+*** E1oM20
+
+#+BEGIN_SRC bash
+cd ~/projects/GISS/modelE_2.1_branch/decks
+
+RUNNAME=E1oM20_r01
+
+make rundeck RUN=${RUNNAME} RUNSRC=E1oM20 OVERWRITE=YES
+
+ # YEARI=1999,MONTHI=12,DATEI=1,HOURI=0,
+ # YEARE=2011,MONTHE=1,DATEE=1,HOURE=0,     KDIAG=13*0,
+ # ISTART=2,IRANDI=0, YEARE=1999,MONTHE=12,DATEE=1,HOURE=1,JWRITE=1
+                                 
+make clean RUN=${RUNNAME}
+make -j setup RUN=${RUNNAME} EXTRA_FFLAGS="-Ddbgcsv_silent"
+#+END_SRC
+
+** First run
+
+*** Run 1 hour
+#+BEGIN_SRC bash
+../exec/runE ${RUNNAME} -cold-restart -np 2
+#+END_SRC
+
+*** Run longer until {YEAR,MONTH,DATE,HOUR}E defined in I
+
+#+BEGIN_SRC bash
+../exec/runE ${RUNNAME} -np 2
+#+END_SRC
+
+Examine outputs in run folder...
+
+** Postprocess
+
++ From decks folder
+
+#+BEGIN_SRC bash :exports both :results verbatim
+cd ${RUNNAME}/
+
+mkdir post
+cd post
+
+# annual sum of first 20 years
+sumfiles ../???10{0,1}[0-9]* # ANN1000-1019.acc${RUNNAME}.nc
+
+# monthly sum of first 20 years
+MONTHS=$(locale mon|tr '[:lower:]' '[:upper:]'| tr ';' '\n' |cut -c1-3)
+YEARS=$(seq 1000 1019|tr '\n' ','| sed 's/,$//')
+parallel "sumfiles ../{1}10[0-1][0-9]*" ::: ${MONTHS}
+
+
+scaleacc ANN1000-1019.acc${RUNNAME}.nc aij,aj,ajl,aijl,aijk,ijhc
+ncview ANN1000-1019.aij${RUNNAME}.nc
+# look at "impm_lndice", "MICB", etc.
+#+END_SRC
+  
+
+* ModelE to PISM
 
 ** Post-process one month data from ModelE to more generic format
 
