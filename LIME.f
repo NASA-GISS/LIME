@@ -7,7 +7,7 @@
       contains
 
       subroutine dbgcsv(msg,val,i,j,root)
-! Print "msg,val" statements with ISO date string
+! Print "msg,val" statements with ISO8601 date string
 
 ! Example usage:
 ! In rundeck:
@@ -17,9 +17,9 @@
 ! call dbgcsv(msg="IJ supported", val=v i=II, j=JJ)
 ! call dbgcsv(msg="limited MPI support", val=v, root=.true.)
 !
-! To turn off, either 
-! #define dbgcsv_silent ! rundeck
-! EXTRA_FFLAGS="-Ddbgcsv_silent" ! make setup
+! Off by default. To turn on
+! #define dbgcsv ! rundeck
+! EXTRA_FFLAGS="-Ddbgcsv" ! make setup
 
       use model_com, only: modelEclock
       use BaseTime_mod, only: BaseTime
@@ -40,7 +40,7 @@
       real*8 rs                 ! seconds
       type (BaseTime) :: t      ! time
 
-#ifdef dbgscv_silent
+#ifndef dbgscv
       return
 #endif
       
