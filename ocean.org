@@ -20,7 +20,7 @@
     - [[#run-longer-until-yearmonthdatehoure-defined-in-i][Run longer until {YEAR,MONTH,DATE,HOUR}E defined in I]]
   - [[#postprocess][Postprocess]]
 - [[#modele-to-pism][ModelE to PISM]]
-  - [[#post-process-one-month-data-from-modele-to-more-generic-format][Post-process one month data from ModelE to more generic format]]
+  - [[#post-process-one-year-data-from-modele-to-more-generic-format][Post-process one year data from ModelE to more generic format]]
   - [[#set-up-modele-domain][Set up ModelE domain]]
   - [[#import][Import]]
     - [[#meta][Meta]]
@@ -29,7 +29,8 @@
     - [[#greenland][Greenland]]
     - [[#antarctica][Antarctica]]
   - [[#export-to-netcdf][Export to NetCDF]]
-    - [[#display][Display]]
+      - [[#display-antarctic-salt-at-all-depths-at-time-0][Display: Antarctic salt at all depths at time 0]]
+      - [[#display-greenland-temp-at-all-times-at-depth-0][Display: Greenland temp at all times at depth 0]]
     - [[#merge-modele-output-with-lime-metadata][Merge ModelE output with LIME metadata]]
     - [[#select-appropriate-t--s-depth-for-each-cell][Select appropriate T & S depth for each cell]]
     - [[#notdone-select-appropriate-t--s-for-each-basin][NOTDONE Select appropriate T & S for each basin]]
@@ -127,22 +128,20 @@ ncview ANN1000-1019.aij${RUNNAME}.nc
 
 * ModelE to PISM
 
-** Post-process one month data from ModelE to more generic format
+** Post-process one year data from ModelE to more generic format
 
 #+BEGIN_SRC bash :exports both :results verbatim
 RUNNAME=E1oM20_r01
-MONTH=FEB
 YEAR=2001
 
 month_names=($(locale mon|tr '[:lower:]' '[:upper:]'| tr ';' '\n' |cut -c1-3))
-month_num=$(echo ${month_names[@]} |tr ' ' '\n' | cat -n|grep ${MONTH} |tr -cd '[:digit:]')
-printf -v month_num "%02d" $month_num # 0 padding
+for m in ${month_names[@]}; do
+  scaleacc ${CMRUNDIR}/${RUNNAME}/${m}${YEAR}.acc${RUNNAME}.nc oijl
+done
 
-scaleacc ${CMRUNDIR}/${RUNNAME}/${MONTH}${YEAR}.acc${RUNNAME}.nc oijl
-mv ${MONTH}${YEAR}.oijl${RUNNAME}.nc oijl.nc
-
-scaleacc ${CMRUNDIR}/${RUNNAME}/${MONTH}${YEAR}.acc${RUNNAME}.nc aij
-mv ${MONTH}${YEAR}.aij${RUNNAME}.nc aij.nc
+# just need one of these for metadata
+scaleacc ${CMRUNDIR}/${RUNNAME}/JAN${YEAR}.acc${RUNNAME}.nc aij
+mv JAN${YEAR}.aij${RUNNAME}.nc aij.nc
 #+END_SRC
 
 ** Set up ModelE domain
@@ -186,18 +185,20 @@ r.resample input=ocnfr@4x5 output=ocnfr
 *** Temperature & salinity
 
 #+BEGIN_SRC bash :exports both :results verbatim
-nlevel=$(ncks -M -C -v zoc oijl.nc |grep "zoc = "|tr -cd '[:digit:]')
-levels=($(seq -w ${nlevel}))
+RUNNAME=E1oM20_r01
+YEAR=2001
 
-for lev in ${levels[@]}; do
-  g.mapset 4x5
-  r.in.gdal -o input=NetCDF:oijl.nc:salt output=salt_${lev} band=${lev}
-  r.in.gdal -o input=NetCDF:oijl.nc:pot_temp output=temp_${lev} band=${lev}
+nlevel=$(ncks -M -C -v zoc JAN${YEAR}.oijl${RUNNAME}.nc |grep "zoc = "|tr -cd '[:digit:]')
+levels=$(seq -w ${nlevel})
 
-  g.mapset 2x2p5
-  r.resample input=salt_${lev}@4x5 output=salt_${lev}
-  r.resample input=temp_${lev}@4x5 output=temp_${lev}
-done
+month_names=$(locale mon|tr '[:lower:]' '[:upper:]'| tr ';' '\n' |cut -c1-3)
+month_nums=$(seq -w 1 12)
+
+g.mapset 4x5
+parallel "r.in.gdal -o input=NetCDF:{1}${YEAR}.oijl${RUNNAME}.nc:{4} output={=4 s/.*_// =}_m{2}_z{3} band={3}" ::: ${month_names} :::+ ${month_nums} ::: ${levels} ::: salt pot_temp
+
+g.mapset 2x2p5
+parallel "r.resample input={3}_m{1}_z{2}@4x5 output={3}_m{1}_z{2}" ::: ${month_nums} ::: ${levels} ::: salt temp
 #+END_SRC
 
 ** Reproject
@@ -208,49 +209,83 @@ The =r.grow.distance= flood-fills the values with nearest neighbor. This is beca
 #+BEGIN_SRC bash :exports both :results verbatim
 grass ./G_GL/PERMANENT
 
-nlevel=$(ncks -M -C -v zoc oijl.nc |grep "zoc = "|tr -cd '[:digit:]')
-levels=($(seq -w ${nlevel}))
+RUNNAME=E1oM20_r01
+YEAR=2001
+
+nlevel=$(ncks -M -C -v zoc JAN${YEAR}.oijl${RUNNAME}.nc |grep "zoc = "|tr -cd '[:digit:]')
+levels=$(seq -w ${nlevel})
+
+month_names=$(locale mon|tr '[:lower:]' '[:upper:]'| tr ';' '\n' |cut -c1-3)
+month_nums=$(seq -w 1 12)
 
 r.proj location=G_ModelE mapset=2x2p5 input=landicefr method=nearest 
 r.proj location=G_ModelE mapset=2x2p5 input=landfr method=nearest
 r.proj location=G_ModelE mapset=2x2p5 input=ocnfr method=nearest
 
-# rasters=$(r.proj location=G_ModelE mapset=2x2p5  -l |grep -E '^temp_|^salt_')
-# parallel --progress --bar "r.proj --q location=G_ModelE mapset=2x2p5 input={1} method=nearest" ::: ${rasters}
-for var in salt temp; do
-  for lev in ${levels[@]}; do
-    r.proj location=G_ModelE mapset=2x2p5 input=${var}_${lev} output=${var}_${lev}_E method=nearest
-    r.grow.distance input=${var}_${lev}_E value=${var}_${lev}
-  done
-done
+rasters=$(r.proj location=G_ModelE mapset=2x2p5 -l |grep -E '^temp_|^salt_')
+parallel --progress --bar "r.proj -n --q location=G_ModelE mapset=2x2p5 input={1} output={1}_E method=nearest" ::: ${rasters}
+parallel --progress --bar "r.grow.distance --q input={1}_E value={1}" ::: ${rasters}
+
+# for var in temp salt; do
+#   for z in ${levels}; do
+#     rasters=$(g.list type=raster pattern="${var}_m??_*z${z}" sep=,)
+#     r.to.rast3 --q input=${rasters} output=${var}_z${z}
+#   done
+# done
+
+# Generate 12 3D rasters: For each month, 1 3D raster of all levels
+g.region t=${nlevel} -p3
+parallel "r.to.rast3 --q input=\$(g.list type=raster pattern=\"{1}_m{2}_z[0-9]?\" sep=,) output={1}_m{2}" ::: temp salt ::: ${month_nums}
+
+# parallel "r3.out.netcdf -p input={1}_m{2} output={1}_m{2}_GL.nc" ::: temp salt ::: ${month_nums}
+
 exit
 #+END_SRC
 
 *** Antarctica
+
 #+BEGIN_SRC bash :exports both :results verbatim
 grass ./G_AQ/PERMANENT
 
-nlevel=$(ncks -M -C -v zoc oijl.nc |grep "zoc = "|tr -cd '[:digit:]')
-levels=($(seq -w ${nlevel}))
+RUNNAME=E1oM20_r01
+YEAR=2001
 
-r.proj -n location=G_ModelE mapset=2x2p5 input=landicefr method=nearest 
-r.proj -n location=G_ModelE mapset=2x2p5 input=landfr method=nearest
-r.proj -n location=G_ModelE mapset=2x2p5 input=ocnfr method=nearest
+nlevel=$(ncks -M -C -v zoc JAN${YEAR}.oijl${RUNNAME}.nc |grep "zoc = "|tr -cd '[:digit:]')
+levels=$(seq -w ${nlevel})
 
-for var in salt temp; do
-  for lev in ${levels[@]}; do
-    r.proj -n location=G_ModelE mapset=2x2p5 input=${var}_${lev} output=${var}_${lev}_E method=nearest
-    r.grow.distance input=${var}_${lev}_E value=${var}_${lev}
-  done
-done
+month_names=$(locale mon|tr '[:lower:]' '[:upper:]'| tr ';' '\n' |cut -c1-3)
+month_nums=$(seq -w 1 12)
+
+r.proj location=G_ModelE mapset=2x2p5 input=landicefr method=nearest 
+r.proj location=G_ModelE mapset=2x2p5 input=landfr method=nearest
+r.proj location=G_ModelE mapset=2x2p5 input=ocnfr method=nearest
+
+rasters=$(r.proj location=G_ModelE mapset=2x2p5 -l |grep -E '^temp_|^salt_')
+parallel --progress --bar "r.proj -n --q location=G_ModelE mapset=2x2p5 input={1} output={1}_E method=nearest" ::: ${rasters}
+parallel --progress --bar "r.grow.distance --q input={1}_E value={1}" ::: ${rasters}
+
+g.region t=${nlevel} -p3
+parallel "r.to.rast3 --q input=\$(g.list type=raster pattern=\"{1}_m{2}_z[0-9]?\" sep=,) output={1}_m{2}" ::: temp salt ::: ${month_nums}
+
+# parallel "r3.out.netcdf -p input={1}_m{2} output={1}_m{2}_AQ.nc" ::: temp salt ::: ${month_nums}
+
+# for var in salt temp; do
+#   ncrcat -A ${var}_m{01..12}_AQ.nc ${var}_AQ.nc
+#   ...
+# done
+
 exit
 #+END_SRC
 
 ** Export to NetCDF
 
 #+BEGIN_SRC jupyter-python :exports both
+%cd '/home/kdm/projects/GISS/docs' 
 import numpy as np
 import xarray as xr
+import calendar
+import glob
+import datetime
 
 from grass_session import Session
 from grass.script import core as gcore
@@ -263,46 +298,65 @@ from grass.pygrass.modules.shortcuts import vector as v
 from grass.pygrass.modules.shortcuts import temporal as t
 from grass.script import array as garray
 
-levels = xr.open_dataset('oijl.nc')['zoc'].values
+afile = glob.glob('JAN*oijl*.nc')[0]
+levels = xr.open_dataset(afile)['zoc'].values
+months = [_.upper() for _ in list(calendar.month_abbr)[1:]]
 
 for loc in ['GL','AQ']:
     ds = xr.Dataset()
+    # S = Session()
+    # S.open(gisdb=".", location="G_"+loc, mapset="PERMANENT", create_opts=None)
     with Session(gisdb=".", location="G_"+loc, mapset="PERMANENT", create_opts=None):
 
         x = garray.array("x", null=np.nan)
         y = garray.array("y", null=np.nan)
         ds['z'] = levels
         ds['x'] = x[0,:]
-        ds['y'] = y[:,0][::-1]
+        ds['y'] = y[:,0]
+        ystr = afile[3:7]
+        ds['time'] = [datetime.datetime(year=int(ystr), month=m, day=1) for m in range(1,13)]
 
         for var in ['temp','salt']:
-            for i,lev in enumerate(levels):
+            for i,mon in enumerate(months):
                 ii = str(i+1).zfill(2)
-                tmp = garray.array(f"{var}_{ii}", null=np.nan)
-                ds[f"{var}_{ii}"] = (('y','x'),tmp)
+                tmp = garray.array3d(f"{var}_m{ii}", null=np.nan)
+                ds[f"{var}_m{ii}"] = (('z','y','x'), tmp)
 
-        lnum = [str(n+1).zfill(2) for n in range(levels.size)]
-        temp3d = xr.concat([ds[f"temp_{n}"] for n in lnum], dim='z')
-        salt3d = xr.concat([ds[f"salt_{n}"] for n in lnum], dim='z')
-        ds['temp'] = (('z','y','x'), temp3d.data)
-        ds['salt'] = (('z','y','x'), salt3d.data)
-        for n in lnum:
-            ds = ds.drop([f"temp_{n}",f"salt_{n}"])
+        month_num = [str(m+1).zfill(2) for m in range(len(months))]
+        temp_time = xr.concat([ds[f"temp_m{n}"] for n in month_num], dim='time')
+        salt_time = xr.concat([ds[f"salt_m{n}"] for n in month_num], dim='time')
+        ds['temp'] = (('time','z','y','x'), temp_time.data)
+        ds['salt'] = (('time','z','y','x'), salt_time.data)
+        for m in month_num:
+            ds = ds.drop([f"temp_m{m}",f"salt_m{m}"])
 
         ds.to_netcdf(f"E2P_{loc}.nc")
 #+END_SRC
 
 #+RESULTS:
+: /home/kdm/projects/GISS/docs
 
-*** Display
+**** Display: Antarctic salt at all depths at time 0
 
 #+BEGIN_SRC jupyter-python :exports both :results file :file figs/E2P_AQ_salt.png
 ds = xr.open_dataset("E2P_AQ.nc")
-_ = ds['salt'].plot(col='z', col_wrap=4, robust=True)
+_ = ds['salt'].isel({'time':0}).plot(col='z', col_wrap=4, robust=True)
 #+END_SRC
 
 #+RESULTS:
 [[file:figs/E2P_AQ_salt.png]]
+
+
+**** Display: Greenland temp at all times at depth 0
+
+#+BEGIN_SRC jupyter-python :exports both :results file :file figs/E2P_GL_temp.png
+ds = xr.open_dataset("E2P_GL.nc")
+_ = ds['temp'].isel({'z':0}).plot(col='time', col_wrap=4, robust=True)
+#+END_SRC
+
+#+RESULTS:
+[[file:figs/E2P_GL_temp.png]]
+
 
 
 *** Merge ModelE output with LIME metadata
@@ -361,6 +415,8 @@ for i,b in enumerate(np.unique(basins)):
 gl['basins'] = (('y','x'), basins)
 #+END_SRC
 
+#+RESULTS:
+
 
 *** Reformat to meet PISM requirements
 
@@ -377,6 +433,8 @@ gl['theta_ocean'].attrs['units'] = 'Celsius'
 gl['salinity_ocean'].attrs['units'] = 'g/kg'
 gl.to_netcdf('ocean_PICO_GL.nc')
 #+END_SRC
+
+#+RESULTS:
 
 ** Test run in PISM
 
