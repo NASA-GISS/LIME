@@ -36,8 +36,28 @@ make rundeck RUN=${RUNNAME} RUNSRC=E1oM20 OVERWRITE=YES
  # ISTART=2,IRANDI=0, YEARE=1999,MONTHE=12,DATEE=1,HOURE=1,JWRITE=1
                                  
 make clean RUN=${RUNNAME}
-make -j setup RUN=${RUNNAME} EXTRA_FFLAGS="-Ddbgcsv_silent"
+make -j setup RUN=${RUNNAME}
 #+END_SRC
+
+
+**** E213tlF40oQ40X1
+
+#+BEGIN_SRC bash
+cd ~/projects/GISS/modelE_2.1_branch/decks
+
+RUNNAME=E213tlF40oQ40X1
+
+# copy from docs folder. Not in template folder.
+# make rundeck RUN=${RUNNAME} RUNSRC=E213F40oQ40 OVERWRITE=YES
+
+ # YEARI=7501,MONTHI=1,DATEI=1,HOURI=0, ! pick IYEAR1=YEARI (default) or < YEARI
+ # YEARE=7502,MONTHE=1,DATEE=1,HOURE=0,     KDIAG=12*0,9,
+ # ISTART=9,IRANDI=0, YEARE=7501,MONTHE=1,DATEE=1,HOURE=1,
+                                 
+make clean RUN=${RUNNAME}
+make -j setup RUN=${RUNNAME}
+#+END_SRC
+
 
 *** First run
 
